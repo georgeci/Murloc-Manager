@@ -36,11 +36,11 @@ class WorktreeManager:
         self.worktrees_root = worktrees_root
         self.base_branch = base_branch
 
-    def branch_name(self, issue_number: int, title: str) -> str:
-        return f"murloc/issue-{issue_number}-{_slug(title)}"
+    def branch_name(self, type_: str, issue_number: int, title: str) -> str:
+        return f"{type_}/issue-{issue_number}-{_slug(title)}"
 
-    def create(self, issue_number: int, title: str) -> Worktree:
-        branch = self.branch_name(issue_number, title)
+    def create(self, type_: str, issue_number: int, title: str) -> Worktree:
+        branch = self.branch_name(type_, issue_number, title)
         wt_path = self.worktrees_root / f"issue-{issue_number}"
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
         if wt_path.exists():

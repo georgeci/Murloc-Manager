@@ -11,7 +11,6 @@ from .github_client import PyGithubClient
 from .logging_setup import get_logger, setup_logging
 from .orchestrator import Orchestrator
 from .project_state import LabelMap
-from .retry_policy import RetryPolicy
 from .worktree_manager import WorktreeManager
 
 log = get_logger()
@@ -48,8 +47,6 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClien
         gh=gh,
         worktrees=wm,
         executor=executor,
-        retry=RetryPolicy(max_attempts=settings.retry.max_attempts),
-        check_commands=settings.checks.commands,
         executor_timeout_sec=settings.executor.timeout_sec,
     )
     return orch, gh

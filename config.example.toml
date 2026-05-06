@@ -14,16 +14,7 @@ blocked = "agent:blocked"
 kind = "claude_cli"
 command = "claude"
 extra_args = ["--print", "--permission-mode=acceptEdits"]
-timeout_sec = 600
-
-[retry]
-max_attempts = 3
-
-[checks]
-commands = [
-    ["ruff", "check", "."],
-    ["pytest", "-q"],
-]
+timeout_sec = 1800
 
 [paths]
 worktrees_root = ".murloc/worktrees"

@@ -2,35 +2,47 @@
 
 > mrglglgl — local orchestrator that drives Claude Code CLI through GitHub Issues.
 
-A tiny chaotic Murloc runs around your GitHub Issues, claims one labeled
-`agent:ready`, spawns a git worktree, hands the issue to Claude Code CLI,
-runs your checks, opens a PR, and labels it `agent:review` for you to merge.
+A tiny chaotic Murloc watches your GitHub Issues, claims one labeled
+`agent:ready`, opens a worktree on a conventionally-named branch, hands the
+issue to Claude Code CLI, then ships whatever the agent committed and labels
+the issue `agent:review` for you to merge.
+
+Murloc itself does **not** run tests, linters, or retries. The agent decides
+how to verify its own work. Murloc is a dispatcher and a finisher, not a
+referee.
 
 ## Pipeline
 
 ```
 GitHub Issue (agent:ready)
   ↓ claim → agent:running
-worktree per task (murloc/issue-<n>-<slug>)
+classify type from label `type:<x>` / title prefix → feat|fix|chore|...
   ↓
-Claude Code CLI (subprocess) edits files
+worktree on branch <type>/issue-<n>-<slug>
   ↓
-checks (ruff + pytest by default; configurable to Gradle etc.)
-  ↓ retry up to N times on failure
-push branch → open PR
+Claude Code CLI edits + commits (it picks its own checks)
+  ↓
+push branch
+  ↓ first commit subject/body becomes the PR title/description
+open PR (Resolves #N footer appended)
   ↓
 Issue → agent:review (you merge)
 ```
 
+If the agent exits non-zero, or exits cleanly without committing anything,
+Murloc moves the issue to `agent:failed` and leaves the worktree for you to
+inspect.
+
 ## v1 scope
 
-In v1: worktree-per-task, Claude CLI executor, retry policy, single-task
-processing. NOT in v1: scope detector, diff guard, LM Studio router, Codex,
+In v1: poll → claim → worktree+branch → executor → push → PR → review.
+NOT in v1: scope detector, diff guard, LM Studio router, Codex executor,
 parallel tasks. Those are tracked as separate Issues.
 
 ## Quickstart
 
-Requires Python 3.12+, git, and the `claude` CLI installed and authenticated.
+Requires Python 3.12+, git, the `gh` CLI (only if the agent uses it), and
+the `claude` CLI installed and authenticated.
 
 ```bash
 python3 -m venv .venv
@@ -53,23 +65,33 @@ murloc status
 ### GitHub setup (one-time)
 
 1. Create labels: `agent:ready`, `agent:running`, `agent:review`,
-   `agent:failed`, `agent:blocked`.
+   `agent:failed`, `agent:blocked`. Optionally `type:feat`, `type:fix`,
+   `type:chore`, etc. for branch classification.
 2. Branch protection on `main`: require PR review (only you merge).
 3. `GITHUB_TOKEN` with `repo` scope in `.env`.
 
-## Configuration
+## Branch naming
 
-`config.toml` controls everything. The check commands are an array, so to
-target an Android/KMP repo later you swap them for Gradle without code
-changes:
+Murloc picks a conventional commit type using this order:
 
-```toml
-[checks]
-commands = [
-    ["./gradlew", ":shared:compileKotlinJvm", "-q"],
-    ["./gradlew", ":composeApp:compileDebugKotlinAndroid", "-q"],
-]
-```
+1. Issue label `type:<x>` where `<x>` ∈ feat|fix|chore|refactor|test|docs|style|ci|build|perf
+2. Bare conventional label (e.g. just `fix`)
+3. Title prefix `feat:`, `fix(scope):`, etc.
+4. Fallback: `chore`
+
+Branch is `<type>/issue-<n>-<slugified-title>`.
+
+## Agent contract
+
+The prompt tells the agent:
+
+- Edit files inside the worktree.
+- Run whatever checks you think appropriate.
+- Commit. **Your first commit's subject becomes the PR title; its body
+  becomes the PR description.** Murloc appends a `Resolves #N` footer.
+- Do not push or open a PR yourself.
+- Exit non-zero (with stderr) if you cannot finish — Murloc will mark the
+  issue failed.
 
 ## Development
 
@@ -82,21 +104,21 @@ pytest -q
 
 ```
 src/murloc/
-  cli.py              # click entry point
-  config.py           # pydantic settings from config.toml + .env
-  logging_setup.py    # structlog
-  github_client.py    # PyGithub wrapper, claim/PR/labels
-  project_state.py    # FSM over labels
-  worktree_manager.py # git worktree per issue
+  cli.py               # click entry point
+  config.py            # pydantic settings from config.toml + .env
+  logging_setup.py     # structlog
+  github_client.py     # PyGithub wrapper, claim/PR/labels
+  project_state.py     # label-FSM helpers
+  worktree_manager.py  # git worktree per issue
+  issue_classifier.py  # pick conventional commit type
   executors/
-    base.py           # Executor protocol
-    claude_cli.py     # subprocess `claude --print ...`
-  prompt_builder.py   # initial + retry prompts
-  checks_runner.py    # run configured check commands
-  retry_policy.py     # max attempts gate
-  orchestrator.py     # the pipeline
+    base.py            # Executor protocol
+    claude_cli.py      # subprocess `claude --print ...`
+  prompt_builder.py    # builds the agent's task prompt
+  orchestrator.py      # the dispatcher pipeline
 ```
 
 ## Principle
 
-> LLM proposes. Murloc Manager decides. Git/checks verify. Human merges.
+> Murloc dispatches. The agent verifies and writes the PR description.
+> Git carries the work. Human merges.

@@ -32,9 +32,9 @@ def test_slug_basic() -> None:
 
 def test_create_and_cleanup(repo: Path, tmp_path: Path) -> None:
     wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
-    wt = wm.create(42, "Fix typo in README")
+    wt = wm.create("fix", 42, "Fix typo in README")
     assert wt.path.exists()
-    assert wt.branch == "murloc/issue-42-fix-typo-in-readme"
+    assert wt.branch == "fix/issue-42-fix-typo-in-readme"
     assert (wt.path / "README.md").exists()
 
     wm.cleanup(42)
@@ -43,8 +43,8 @@ def test_create_and_cleanup(repo: Path, tmp_path: Path) -> None:
 
 def test_create_when_path_exists_recreates(repo: Path, tmp_path: Path) -> None:
     wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
-    wm.create(1, "First")
-    # Issue with same number — should cleanup and recreate
-    wt2 = wm.create(1, "Second attempt")
+    wm.create("chore", 1, "First")
+    wt2 = wm.create("feat", 1, "Second attempt")
     assert wt2.path.exists()
+    assert wt2.branch.startswith("feat/")
     wm.cleanup(1)

@@ -9,7 +9,6 @@ import pytest
 from murloc.executors.base import ExecResult
 from murloc.github_client import IssueRef
 from murloc.orchestrator import Orchestrator
-from murloc.retry_policy import RetryPolicy
 from murloc.worktree_manager import WorktreeManager
 
 
@@ -22,7 +21,7 @@ class FakeGh:
     claimed: list[int] = field(default_factory=list)
     review: list[tuple[int, str, str]] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
-    prs_opened: list[tuple[int, str]] = field(default_factory=list)
+    prs_opened: list[tuple[int, str, str, str]] = field(default_factory=list)
 
     def claim(self, issue_number: int) -> bool:
         self.claimed.append(issue_number)
@@ -35,32 +34,42 @@ class FakeGh:
         self.failed.append((issue_number, summary))
 
     def open_pr(self, issue_number: int, branch: str, title: str, body: str) -> str:
-        self.prs_opened.append((issue_number, branch))
+        self.prs_opened.append((issue_number, branch, title, body))
         return f"https://example.test/pr/{issue_number}"
 
 
 class FakeExecutor:
-    """Writes a file in cwd to simulate the agent making a change."""
+    """Simulates the agent: edits a file and creates a commit with a PR-style message."""
 
-    def __init__(self, contents: str = "agent was here\n", ok: bool = True) -> None:
-        self.contents = contents
+    def __init__(
+        self,
+        commit_subject: str = "feat: add agent file",
+        commit_body: str = "Adds AGENT.txt with a marker so we can ship.",
+        ok: bool = True,
+        commit: bool = True,
+    ) -> None:
+        self.commit_subject = commit_subject
+        self.commit_body = commit_body
         self.ok = ok
+        self.commit = commit
         self.calls = 0
 
     def run(self, prompt: str, cwd: Path, timeout_sec: int) -> ExecResult:
         self.calls += 1
         if not self.ok:
             return ExecResult(ok=False, stdout="", stderr="boom", exit_code=2)
-        (cwd / "AGENT.txt").write_text(f"{self.contents} attempt={self.calls}\n")
-        # Stage so the next git push has something to push.
-        subprocess.run(
-            ["git", "add", "AGENT.txt"], cwd=str(cwd), check=True, capture_output=True
-        )
-        subprocess.run(
-            ["git", "-c", "user.email=t@t", "-c", "user.name=t",
-             "commit", "-m", "agent change"],
-            cwd=str(cwd), check=True, capture_output=True,
-        )
+        if self.commit:
+            (cwd / "AGENT.txt").write_text(f"agent was here attempt={self.calls}\n")
+            subprocess.run(
+                ["git", "add", "AGENT.txt"], cwd=str(cwd), check=True, capture_output=True
+            )
+            msg = self.commit_subject
+            if self.commit_body:
+                msg = f"{self.commit_subject}\n\n{self.commit_body}"
+            subprocess.run(
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg],
+                cwd=str(cwd), check=True, capture_output=True,
+            )
         return ExecResult(ok=True, stdout="", stderr="", exit_code=0)
 
 
@@ -81,79 +90,85 @@ def repo_with_remote(tmp_path: Path) -> tuple[Path, Path]:
     return repo, remote
 
 
-def test_orchestrator_happy_path(repo_with_remote: tuple[Path, Path], tmp_path: Path) -> None:
-    repo, remote = repo_with_remote
+def _make_orch(repo: Path, tmp_path: Path, gh: FakeGh, executor: FakeExecutor) -> Orchestrator:
     wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
-    gh = FakeGh()
-    executor = FakeExecutor()
-    orch = Orchestrator(
-        gh=gh,
-        worktrees=wm,
-        executor=executor,
-        retry=RetryPolicy(max_attempts=3),
-        check_commands=[["true"]],
-        executor_timeout_sec=60,
-    )
+    return Orchestrator(gh=gh, worktrees=wm, executor=executor, executor_timeout_sec=60)
 
-    issue = IssueRef(number=7, title="Add agent file", body="please", labels=[], html_url="x")
+
+def test_happy_path_uses_first_commit_for_pr(
+    repo_with_remote: tuple[Path, Path], tmp_path: Path
+) -> None:
+    repo, _ = repo_with_remote
+    gh = FakeGh()
+    executor = FakeExecutor(
+        commit_subject="feat: add agent file",
+        commit_body="Adds AGENT.txt with a marker so we can ship.",
+    )
+    orch = _make_orch(repo, tmp_path, gh, executor)
+
+    issue = IssueRef(
+        number=7, title="anything", body="please", labels=["type:feat"], html_url="x"
+    )
     outcome = orch.process(issue)
 
     assert outcome.success is True
-    assert outcome.attempts == 1
     assert outcome.pr_url == "https://example.test/pr/7"
     assert gh.claimed == [7]
     assert len(gh.review) == 1
     assert gh.failed == []
-    assert executor.calls == 1
+    assert len(gh.prs_opened) == 1
+    issue_num, branch, title, body = gh.prs_opened[0]
+    assert branch.startswith("feat/issue-7-")
+    assert title == "feat: add agent file"
+    assert "Adds AGENT.txt with a marker" in body
+    assert "Resolves #7" in body
 
 
-def test_orchestrator_failed_after_max_attempts(
+def test_executor_failure_marks_failed(
     repo_with_remote: tuple[Path, Path], tmp_path: Path
 ) -> None:
     repo, _ = repo_with_remote
-    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
-    gh = FakeGh()
-    executor = FakeExecutor()
-    orch = Orchestrator(
-        gh=gh,
-        worktrees=wm,
-        executor=executor,
-        retry=RetryPolicy(max_attempts=2),
-        check_commands=[["false"]],
-        executor_timeout_sec=60,
-    )
-
-    issue = IssueRef(number=8, title="Will fail", body="", labels=[], html_url="x")
-    outcome = orch.process(issue)
-
-    assert outcome.success is False
-    assert outcome.attempts == 2
-    assert gh.failed and gh.failed[0][0] == 8
-    assert gh.review == []
-    assert executor.calls == 2
-
-
-def test_orchestrator_executor_failure_marks_failed(
-    repo_with_remote: tuple[Path, Path], tmp_path: Path
-) -> None:
-    repo, _ = repo_with_remote
-    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
     gh = FakeGh()
     executor = FakeExecutor(ok=False)
-    orch = Orchestrator(
-        gh=gh,
-        worktrees=wm,
-        executor=executor,
-        retry=RetryPolicy(max_attempts=2),
-        check_commands=[["true"]],  # checks would pass, but executor fails first
-        executor_timeout_sec=60,
-    )
+    orch = _make_orch(repo, tmp_path, gh, executor)
 
     issue = IssueRef(number=9, title="Executor dies", body="", labels=[], html_url="x")
     outcome = orch.process(issue)
 
     assert outcome.success is False
-    assert outcome.attempts == 2
     assert gh.review == []
-    assert gh.failed and "executor:FakeExecutor" in gh.failed[0][1]
+    assert gh.failed and gh.failed[0][0] == 9
     assert "boom" in gh.failed[0][1]
+    assert gh.prs_opened == []
+
+
+def test_no_commits_marks_failed(
+    repo_with_remote: tuple[Path, Path], tmp_path: Path
+) -> None:
+    repo, _ = repo_with_remote
+    gh = FakeGh()
+    executor = FakeExecutor(ok=True, commit=False)
+    orch = _make_orch(repo, tmp_path, gh, executor)
+
+    issue = IssueRef(number=11, title="docs: tweak", body="", labels=[], html_url="x")
+    outcome = orch.process(issue)
+
+    assert outcome.success is False
+    assert gh.failed and "no commits" in gh.failed[0][1].lower()
+    assert gh.prs_opened == []
+
+
+def test_branch_type_falls_back_to_chore(
+    repo_with_remote: tuple[Path, Path], tmp_path: Path
+) -> None:
+    repo, _ = repo_with_remote
+    gh = FakeGh()
+    executor = FakeExecutor(commit_subject="random subject", commit_body="")
+    orch = _make_orch(repo, tmp_path, gh, executor)
+
+    issue = IssueRef(number=12, title="some random thing", body="", labels=[], html_url="x")
+    outcome = orch.process(issue)
+
+    assert outcome.success is True
+    assert gh.prs_opened[0][1].startswith("chore/issue-12-")
+    assert gh.prs_opened[0][2] == "random subject"
