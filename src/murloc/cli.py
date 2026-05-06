@@ -7,7 +7,7 @@ import click
 
 from .config import Settings, load_settings
 from .executors.claude_cli import ClaudeCliExecutor
-from .github_client import PyGithubClient
+from .github_client import GitHubClient, ProjectsV2Client, PyGithubClient
 from .logging_setup import get_logger, setup_logging
 from .orchestrator import Orchestrator
 from .project_state import LabelMap
@@ -16,25 +16,38 @@ from .worktree_manager import WorktreeManager
 log = get_logger()
 
 
-def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClient]:
+def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, GitHubClient]:
     if not settings.github_token:
         raise click.ClickException("GITHUB_TOKEN is missing in environment / .env")
 
-    labels = LabelMap(
-        ready=settings.labels.ready,
-        running=settings.labels.running,
-        review=settings.labels.review,
-        failed=settings.labels.failed,
-        blocked=settings.labels.blocked,
-    )
-    gh = PyGithubClient(
-        token=settings.github_token,
-        owner=settings.github.owner,
-        repo=settings.github.repo,
-        base_branch=settings.github.base_branch,
-        labels=labels,
-        dry_run=settings.runtime.dry_run,
-    )
+    if settings.github.project is not None:
+        proj = settings.github.project
+        gh: GitHubClient = ProjectsV2Client(
+            token=settings.github_token,
+            owner=settings.github.owner,
+            repo=settings.github.repo,
+            base_branch=settings.github.base_branch,
+            project_owner=proj.owner or settings.github.owner,
+            project_number=proj.number,
+            status_field=proj.status_field,
+            dry_run=settings.runtime.dry_run,
+        )
+    else:
+        labels = LabelMap(
+            ready=settings.labels.ready,
+            running=settings.labels.running,
+            review=settings.labels.review,
+            failed=settings.labels.failed,
+            blocked=settings.labels.blocked,
+        )
+        gh = PyGithubClient(
+            token=settings.github_token,
+            owner=settings.github.owner,
+            repo=settings.github.repo,
+            base_branch=settings.github.base_branch,
+            labels=labels,
+            dry_run=settings.runtime.dry_run,
+        )
     wm = WorktreeManager(
         repo_root=Path(settings.paths.repo_root).resolve(),
         worktrees_root=Path(settings.paths.worktrees_root).resolve(),

@@ -1,8 +1,19 @@
-# Which GitHub repo Murloc watches for agent:ready issues.
+# Which GitHub repo Murloc watches.
 [github]
 owner = "georgeci"
-repo = "https://github.com/georgeci/Murloc-Manager"
+repo = "Murloc-Manager"
 base_branch = "main"
+
+# Projects v2 integration — drives Murloc state via board Status field.
+# Required fields: number (the N from /users/<owner>/projects/<N>).
+# When this block is present, Murloc reads the ready queue and flips statuses
+# via GraphQL; the project-status-mirror workflow is not needed.
+# Expected Status option names: "Todo", "In Progress", "In Review", "Failed".
+[github.project]
+owner_type   = "user"    # only "user" supported
+# owner      = "alice"   # optional: project owner login if different from github.owner
+number       = 1         # /users/<owner>/projects/<N>
+status_field = "Status"  # name of the single-select field on the board
 
 # Local checkout of that same repo. Murloc creates worktrees from here and
 # pushes from here. Use an absolute path if you run `murloc` from elsewhere.
@@ -11,6 +22,8 @@ base_branch = "main"
 repo_root = "."
 worktrees_root = ".murloc/worktrees"
 
+# Labels are now for classification only (type:bug, area:auth, priority:high).
+# They are no longer used as workflow state when [github.project] is configured.
 [labels]
 ready = "agent:ready"
 running = "agent:running"
