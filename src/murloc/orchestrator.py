@@ -16,14 +16,18 @@ log = get_logger()
 
 
 def _redact_paths(text: str) -> str:
-    """Strip local filesystem identifiers before sending text to public GitHub.
+    """Strip local filesystem identifiers before sending text outside the host.
 
-    Replaces $HOME with ~ and collapses any remaining absolute paths under
-    /Users/<name>/ or /home/<name>/ to /Users/<redacted>/ form so issue
-    comments don't leak the developer's username or directory layout.
+    Replaces the literal home path (/Users/<me> or /home/<me>) and the
+    `$HOME` / `${HOME}` tokens with `~`, then collapses any remaining
+    /Users/<x>/ or /home/<x>/ prefix to a `<redacted>` form so failure
+    summaries — whether they end up in a public GitHub comment or in a
+    centrally-collected log — do not leak the developer's username or
+    directory layout.
     """
     home = str(Path.home())
     out = text.replace(home, "~")
+    out = out.replace("${HOME}", "~").replace("$HOME", "~")
     out = re.sub(r"/Users/[^/\s'\"]+", "/Users/<redacted>", out)
     out = re.sub(r"/home/[^/\s'\"]+", "/home/<redacted>", out)
     return out
@@ -148,7 +152,7 @@ class Orchestrator:
                 issue=issue.number,
                 cmd=e.cmd,
                 exit_code=e.returncode,
-                stderr=stderr,
+                stderr=_redact_paths(stderr),
             )
             detail = stderr or (e.stdout or "").strip() or f"exit code {e.returncode}"
             public = _redact_paths(detail)

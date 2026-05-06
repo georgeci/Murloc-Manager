@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import queue
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from ..logging_setup import get_logger
 from .base import ExecResult
 
 log = get_logger()
+
+_TAIL_CHAR_LIMIT = 200_000
+_QUEUE_POLL_SEC = 0.5
 
 
 class ClaudeCliExecutor:
@@ -36,28 +42,58 @@ class ClaudeCliExecutor:
             bufsize=1,
         )
 
-        chunks: list[str] = []
-        deadline = started + timeout_sec
-        timed_out = False
-        try:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                chunks.append(line)
-                if time.monotonic() > deadline:
-                    timed_out = True
-                    proc.kill()
-                    break
-        finally:
+        # Reader thread pushes lines into a queue so the main loop can enforce
+        # the deadline even when the child stops emitting newlines.
+        q: queue.Queue[str | None] = queue.Queue()
+
+        def _reader() -> None:
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    q.put(line)
+            finally:
+                q.put(None)
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+
+        # Bounded tail: append every line, but cap total stored chars so a
+        # very long agent run does not consume unbounded memory. The tail is
+        # only used for failure reporting; live output is streamed straight
+        # to stderr.
+        tail: deque[str] = deque()
+        tail_size = 0
+        timed_out = False
+        deadline = started + timeout_sec
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
                 proc.kill()
-                proc.wait()
+                break
+            try:
+                line = q.get(timeout=min(_QUEUE_POLL_SEC, max(remaining, 0.05)))
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            tail.append(line)
+            tail_size += len(line)
+            while tail and tail_size > _TAIL_CHAR_LIMIT:
+                tail_size -= len(tail.popleft())
+
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        reader.join(timeout=2)
 
         duration = round(time.monotonic() - started, 2)
-        output = "".join(chunks)
+        output = "".join(tail)
 
         if timed_out:
             log.warning("claude_timeout", duration_sec=duration, timeout_sec=timeout_sec)
@@ -69,7 +105,12 @@ class ClaudeCliExecutor:
             )
 
         exit_code = proc.returncode if proc.returncode is not None else -1
-        log.info("claude_exit", exit_code=exit_code, duration_sec=duration, output_chars=len(output))
+        log.info(
+            "claude_exit",
+            exit_code=exit_code,
+            duration_sec=duration,
+            output_chars=len(output),
+        )
         return ExecResult(
             ok=exit_code == 0,
             stdout=output,

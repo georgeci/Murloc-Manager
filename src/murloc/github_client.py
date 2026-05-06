@@ -56,14 +56,14 @@ class PyGithubClient:
         return [self._to_ref(i) for i in issues if i.pull_request is None]
 
     def claim(self, issue_number: int) -> bool:
-        if self._dry_run:
-            return True
         issue = self._repo.get_issue(issue_number)
         names = {lbl.name for lbl in issue.labels}
         if self._labels.running in names:
             return False
         if self._labels.ready not in names:
             return False
+        if self._dry_run:
+            return True
         new_labels = (names - {self._labels.ready}) | {self._labels.running}
         issue.set_labels(*new_labels)
         return True
