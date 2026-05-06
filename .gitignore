@@ -12,3 +12,5 @@ config.toml
 dist/
 build/
 .DS_Store
+htmlcov/
+.coverage

@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
+    "pytest-cov>=5.0",
     "pytest-mock>=3.14",
     "ruff>=0.5",
 ]
@@ -39,4 +40,12 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=murloc --cov-report=term-missing --cov-report=html:htmlcov"
+
+[tool.coverage.run]
+source = ["src/murloc"]
+omit = ["*/murloc/cli.py", "*/murloc/executors/claude_cli.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
