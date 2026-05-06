@@ -65,6 +65,47 @@ def test_dry_run_skips_push_and_pr_open(
     assert "feat/issue-42" not in proc.stdout
 
 
+def test_branch_collision_appends_suffix(
+    repo_with_remote: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """If the obvious branch name is already on the remote (e.g. from a
+    previous PR), Murloc must pick `<base>-2` and push that, instead of
+    failing with non-fast-forward."""
+    import subprocess
+    repo, _ = repo_with_remote
+
+    # Pre-occupy the remote with the canonical branch name.
+    pre_existing = "chore/issue-77-take-the-name"
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "branch", pre_existing, "main"],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "push", "origin", pre_existing],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "branch", "-D", pre_existing],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+
+    gh = FakeGh()
+    executor = FakeExecutor(commit_subject="feat: take the name", commit_body="")
+    wm = WorktreeManager(
+        repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main"
+    )
+    orch = Orchestrator(gh=gh, worktrees=wm, executor=executor, executor_timeout_sec=60)
+
+    issue = IssueRef(number=77, title="take the name", body="", labels=[], html_url="x")
+    outcome = orch.process(issue)
+
+    assert outcome.success is True
+    assert gh.prs_opened, "PR should have been opened on the suffixed branch"
+    branch_used = gh.prs_opened[0][1]
+    assert branch_used == f"{pre_existing}-2", branch_used
+
+
 @pytest.mark.parametrize("running_label,ready_label,expected", [
     ({"agent:running"}, set(), False),
     (set(), set(), False),
