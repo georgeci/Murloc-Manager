@@ -11,6 +11,7 @@ base_branch = "main"
 # Expected Status option names: "Todo", "In Progress", "In Review", "Failed".
 [github.project]
 owner_type   = "user"    # only "user" supported
+# owner      = "alice"   # optional: project owner login if different from github.owner
 number       = 1         # /users/<owner>/projects/<N>
 status_field = "Status"  # name of the single-select field on the board
 

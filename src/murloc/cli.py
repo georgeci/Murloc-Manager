@@ -27,7 +27,7 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, GitHubClient]
             owner=settings.github.owner,
             repo=settings.github.repo,
             base_branch=settings.github.base_branch,
-            project_owner=settings.github.owner,
+            project_owner=proj.owner or settings.github.owner,
             project_number=proj.number,
             status_field=proj.status_field,
             dry_run=settings.runtime.dry_run,

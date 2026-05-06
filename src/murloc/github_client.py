@@ -18,7 +18,7 @@ query($login: String!, $number: Int!) {
   user(login: $login) {
     projectV2(number: $number) {
       id
-      fields(first: 20) {
+      fields(first: 100) {
         nodes {
           ... on ProjectV2SingleSelectField {
             id
@@ -40,7 +40,7 @@ query($login: String!, $number: Int!, $after: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
-          fieldValues(first: 20) {
+          fieldValues(first: 100) {
             nodes {
               ... on ProjectV2ItemFieldSingleSelectValue {
                 optionId
@@ -52,7 +52,7 @@ query($login: String!, $number: Int!, $after: String) {
             __typename
             ... on Issue {
               number title body url state
-              labels(first: 20) { nodes { name } }
+              labels(first: 100) { nodes { name } }
             }
           }
         }
@@ -66,7 +66,7 @@ _QUERY_ITEM_STATUS = """
 query($itemId: ID!) {
   node(id: $itemId) {
     ... on ProjectV2Item {
-      fieldValues(first: 20) {
+      fieldValues(first: 100) {
         nodes {
           ... on ProjectV2ItemFieldSingleSelectValue {
             optionId
@@ -241,11 +241,13 @@ class ProjectsV2Client:
             },
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"GitHub GraphQL HTTP {exc.code}: {body[:500]}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"GitHub GraphQL network error: {exc}") from exc
         if "errors" in result:
             raise RuntimeError(f"GitHub GraphQL errors: {result['errors']}")
         return result["data"]

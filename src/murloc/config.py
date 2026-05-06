@@ -7,13 +7,24 @@ import tomllib
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProjectCfg(BaseModel):
     owner_type: str = "user"
+    owner: str | None = None  # defaults to github.owner when unset
     number: int
     status_field: str = "Status"
+
+    @field_validator("owner_type")
+    @classmethod
+    def _only_user_owner(cls, v: str) -> str:
+        if v != "user":
+            raise ValueError(
+                f"github.project.owner_type='{v}' is not supported; "
+                "only 'user' is implemented."
+            )
+        return v
 
 
 class GithubCfg(BaseModel):
