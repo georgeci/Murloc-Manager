@@ -10,10 +10,17 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 
+class ProjectCfg(BaseModel):
+    owner_type: str = "user"
+    number: int
+    status_field: str = "Status"
+
+
 class GithubCfg(BaseModel):
     owner: str
     repo: str
     base_branch: str = "main"
+    project: ProjectCfg | None = None
 
 
 class LabelsCfg(BaseModel):
