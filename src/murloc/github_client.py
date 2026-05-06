@@ -253,13 +253,22 @@ class ProjectsV2Client:
         return result["data"]
 
     def _ensure_project_meta(self) -> None:
-        if self._project_id is not None:
+        if (
+            self._project_id is not None
+            and self._status_field_id is not None
+            and self._status_options
+        ):
             return
         data = self._graphql(
             _QUERY_PROJECT_META,
             {"login": self._project_owner, "number": self._project_number},
         )
-        project = data["user"]["projectV2"]
+        project = (data.get("user") or {}).get("projectV2")
+        if project is None:
+            raise RuntimeError(
+                f"Project {self._project_owner}/projects/{self._project_number} "
+                "could not be found or is not accessible to the configured token."
+            )
         self._project_id = project["id"]
         for field in project["fields"]["nodes"]:
             if not field.get("id"):
@@ -275,6 +284,7 @@ class ProjectsV2Client:
             )
 
     def _set_status(self, item_id: str, status_name: str) -> None:
+        self._ensure_project_meta()
         option_id = self._status_options.get(status_name)
         if option_id is None:
             raise RuntimeError(f"Status option '{status_name}' not found in project field")
@@ -290,7 +300,10 @@ class ProjectsV2Client:
 
     def _current_status_option_id(self, item_id: str) -> str | None:
         data = self._graphql(_QUERY_ITEM_STATUS, {"itemId": item_id})
-        for fv in data["node"]["fieldValues"]["nodes"]:
+        node = data.get("node")
+        if node is None:
+            return None
+        for fv in (node.get("fieldValues") or {}).get("nodes", []):
             if fv.get("field", {}).get("name") == self._status_field:
                 return fv.get("optionId")
         return None
@@ -359,21 +372,33 @@ class ProjectsV2Client:
         self._set_status(item_id, "In Progress")
         return True
 
+    def _best_effort_set_status(self, issue_number: int, status_name: str) -> None:
+        item_id = self._item_cache.get(issue_number)
+        if not item_id:
+            return
+        try:
+            self._set_status(item_id, status_name)
+        except Exception as exc:  # noqa: BLE001 — comment is the user-visible signal
+            from .logging_setup import get_logger
+
+            get_logger().warning(
+                "projects_v2_status_update_failed",
+                issue=issue_number,
+                status=status_name,
+                error=str(exc),
+            )
+
     def mark_review(self, issue_number: int, pr_url: str, summary: str) -> None:
         if self._dry_run:
             return
-        item_id = self._item_cache.get(issue_number)
-        if item_id:
-            self._set_status(item_id, "In Review")
+        self._best_effort_set_status(issue_number, "In Review")
         issue = self._repo.get_issue(issue_number)
         issue.create_comment(f"Mrglglgl! PR ready for review: {pr_url}\n\n{summary}")
 
     def mark_failed(self, issue_number: int, summary: str) -> None:
         if self._dry_run:
             return
-        item_id = self._item_cache.get(issue_number)
-        if item_id:
-            self._set_status(item_id, "Failed")
+        self._best_effort_set_status(issue_number, "Failed")
         issue = self._repo.get_issue(issue_number)
         issue.create_comment(f"Mrglgl... agent failed.\n\n{summary}")
 

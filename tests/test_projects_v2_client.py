@@ -304,6 +304,35 @@ class TestMarkReviewAndFailed:
         assert "agent failed" in comment_text
         assert "exit code 1" in comment_text
 
+    def test_mark_review_posts_comment_even_if_status_update_fails(self) -> None:
+        client = _make_client()
+        client._item_cache[3] = "PVTI_3"
+
+        fake_issue = MagicMock()
+        client._repo.get_issue.return_value = fake_issue
+
+        with patch.object(client, "_graphql", side_effect=RuntimeError("boom")):
+            client.mark_review(3, "https://github.com/pr/1", "looks good")
+
+        fake_issue.create_comment.assert_called_once()
+
+    def test_mark_failed_posts_comment_even_if_status_update_fails(self) -> None:
+        client = _make_client()
+        client._item_cache[8] = "PVTI_8"
+
+        fake_issue = MagicMock()
+        client._repo.get_issue.return_value = fake_issue
+
+        with patch.object(client, "_graphql", side_effect=RuntimeError("boom")):
+            client.mark_failed(8, "exit code 1")
+
+        fake_issue.create_comment.assert_called_once()
+
+    def test_current_status_returns_none_for_missing_node(self) -> None:
+        client = _make_client()
+        with patch.object(client, "_graphql", return_value={"node": None}):
+            assert client._current_status_option_id("PVTI_missing") is None
+
     def test_dry_run_skips_writes(self) -> None:
         client = _make_client(dry_run=True)
         client._item_cache[2] = "PVTI_2"
@@ -362,6 +391,54 @@ class TestEnsureProjectMeta:
         assert client._status_field_id == "PVTSSF_abc"
         assert client._status_options["Todo"] == "opt1"
         assert client._status_options["Failed"] == "opt4"
+
+    def test_raises_clear_error_when_project_not_found(self) -> None:
+        client = ProjectsV2Client.__new__(ProjectsV2Client)
+        client._project_id = None
+        client._status_field_id = None
+        client._status_options = {}
+        client._project_owner = "alice"
+        client._project_number = 99
+        client._status_field = "Status"
+
+        with patch.object(
+            client,
+            "_graphql",
+            return_value={"user": {"projectV2": None}},
+        ), pytest.raises(RuntimeError, match="could not be found"):
+            client._ensure_project_meta()
+
+    def test_refetches_when_partially_initialized(self) -> None:
+        client = ProjectsV2Client.__new__(ProjectsV2Client)
+        client._project_id = "PVT_xyz"
+        client._status_field_id = None  # partial state
+        client._status_options = {}
+        client._project_owner = "alice"
+        client._project_number = 3
+        client._status_field = "Status"
+
+        meta_resp = {
+            "user": {
+                "projectV2": {
+                    "id": "PVT_xyz",
+                    "fields": {
+                        "nodes": [
+                            {
+                                "id": "PVTSSF_abc",
+                                "name": "Status",
+                                "options": [{"id": "opt1", "name": "Todo"}],
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+
+        with patch.object(client, "_graphql", return_value=meta_resp) as mock_gql:
+            client._ensure_project_meta()
+
+        assert mock_gql.call_count == 1
+        assert client._status_field_id == "PVTSSF_abc"
 
     def test_raises_if_status_field_missing(self) -> None:
         client = ProjectsV2Client.__new__(ProjectsV2Client)
