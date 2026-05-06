@@ -33,10 +33,7 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
             proc.returncode,
             cmd,
             output=proc.stdout,
-            stderr=(
-                f"{proc.stderr.strip()}\n"
-                f"(cmd: {' '.join(cmd)}; cwd: {cwd})"
-            ),
+            stderr=proc.stderr,
         )
     return proc
 

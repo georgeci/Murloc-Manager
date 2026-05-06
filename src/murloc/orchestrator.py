@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .executors.base import Executor
 from .github_client import GitHubClient, IssueRef
@@ -11,6 +13,20 @@ from .prompt_builder import build_initial
 from .worktree_manager import Worktree, WorktreeManager
 
 log = get_logger()
+
+
+def _redact_paths(text: str) -> str:
+    """Strip local filesystem identifiers before sending text to public GitHub.
+
+    Replaces $HOME with ~ and collapses any remaining absolute paths under
+    /Users/<name>/ or /home/<name>/ to /Users/<redacted>/ form so issue
+    comments don't leak the developer's username or directory layout.
+    """
+    home = str(Path.home())
+    out = text.replace(home, "~")
+    out = re.sub(r"/Users/[^/\s'\"]+", "/Users/<redacted>", out)
+    out = re.sub(r"/home/[^/\s'\"]+", "/home/<redacted>", out)
+    return out
 
 
 @dataclass
@@ -72,9 +88,10 @@ class Orchestrator:
 
             if not exec_result.ok:
                 log.info("executor_failed", issue=issue.number, exit_code=exec_result.exit_code)
+                tail = exec_result.stderr[-3000:] or exec_result.stdout[-3000:]
                 summary = (
                     f"Agent exited with code {exec_result.exit_code}.\n\n"
-                    f"```\n{exec_result.stderr[-3000:] or exec_result.stdout[-3000:]}\n```"
+                    f"```\n{_redact_paths(tail)}\n```"
                 )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
@@ -113,13 +130,15 @@ class Orchestrator:
                 exit_code=e.returncode,
                 stderr=stderr,
             )
-            detail = stderr or (e.stdout or "").strip() or repr(e)
-            self.gh.mark_failed(issue.number, f"Orchestrator error: {detail}")
-            return TaskOutcome(issue.number, False, None, f"Error: {detail}")
+            detail = stderr or (e.stdout or "").strip() or f"exit code {e.returncode}"
+            public = _redact_paths(detail)
+            self.gh.mark_failed(issue.number, f"Orchestrator error: {public}")
+            return TaskOutcome(issue.number, False, None, f"Error: {public}")
         except Exception as e:
             log.exception("orchestrator_error", issue=issue.number)
-            self.gh.mark_failed(issue.number, f"Orchestrator error: {e!r}")
-            return TaskOutcome(issue.number, False, None, f"Error: {e!r}")
+            public = _redact_paths(repr(e))
+            self.gh.mark_failed(issue.number, f"Orchestrator error: {public}")
+            return TaskOutcome(issue.number, False, None, f"Error: {public}")
 
     @staticmethod
     def _compose_pr_body(agent_body: str, issue_number: int, commits: int) -> str:
