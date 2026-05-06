@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -53,5 +55,24 @@ def load_settings(config_path: str | Path = "config.toml") -> Settings:
     with path.open("rb") as f:
         data = tomllib.load(f)
     settings = Settings.model_validate(data)
-    settings.github_token = os.getenv("GITHUB_TOKEN", "")
+    settings.github_token = os.getenv("GITHUB_TOKEN", "") or _gh_auth_token()
     return settings
+
+
+def _gh_auth_token() -> str:
+    """Fallback: ask the gh CLI for its current token."""
+    if shutil.which("gh") is None:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["gh", "auth", "token"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()

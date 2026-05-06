@@ -41,16 +41,28 @@ parallel tasks. Those are tracked as separate Issues.
 
 ## Quickstart
 
-Requires Python 3.12+, git, the `gh` CLI (only if the agent uses it), and
-the `claude` CLI installed and authenticated.
+Requires Python 3.12+, git, the `gh` CLI (recommended — used as auth
+fallback), and the `claude` CLI installed and authenticated.
+
+### Pointing at a project
+
+Edit `config.toml`:
+
+- `[github] owner` + `[github] repo` — which GitHub repo to watch for
+  `agent:ready` issues.
+- `[paths] repo_root` — absolute path to the **local clone** of that
+  repo. Worktrees and pushes happen from here. Defaults to `.` (CWD).
+
+You can run Murloc from anywhere as long as `repo_root` points at a
+real git checkout of the configured GitHub repo.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-cp config.example.toml config.toml          # edit owner/repo
-cp .env.example .env                         # set GITHUB_TOKEN
+cp config.example.toml config.toml          # set [github] owner/repo + [paths] repo_root
+cp .env.example .env                         # GITHUB_TOKEN optional — falls back to `gh auth token`
 
 # One-shot: pick first agent:ready issue and run it.
 murloc run-once
@@ -68,7 +80,9 @@ murloc status
    `agent:failed`, `agent:blocked`. Optionally `type:feat`, `type:fix`,
    `type:chore`, etc. for branch classification.
 2. Branch protection on `main`: require PR review (only you merge).
-3. `GITHUB_TOKEN` with `repo` scope in `.env`.
+3. Auth: either `GITHUB_TOKEN` with `repo` scope in `.env`, **or** have
+   the `gh` CLI authenticated (`gh auth login`) — Murloc falls back to
+   `gh auth token` automatically.
 
 ## Branch naming
 

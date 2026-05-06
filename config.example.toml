@@ -1,7 +1,15 @@
+# Which GitHub repo Murloc watches for agent:ready issues.
 [github]
 owner = "georgeci007"
 repo = "Murloc-Manager"
 base_branch = "main"
+
+# Local checkout of that same repo. Murloc creates worktrees from here and
+# pushes from here. Use an absolute path if you run `murloc` from elsewhere.
+#   repo_root = "/Users/me/Developer/my-android-app"
+[paths]
+repo_root = "."
+worktrees_root = ".murloc/worktrees"
 
 [labels]
 ready = "agent:ready"
@@ -15,7 +23,3 @@ kind = "claude_cli"
 command = "claude"
 extra_args = ["--print", "--permission-mode=acceptEdits"]
 timeout_sec = 1800
-
-[paths]
-worktrees_root = ".murloc/worktrees"
-repo_root = "."
