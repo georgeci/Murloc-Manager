@@ -57,6 +57,13 @@ def _format_cost(result: ExecResult) -> str | None:
     return " · ".join(parts)
 
 
+def _with_cost(summary: str, cost_line: str | None) -> str:
+    """Append a cost footer to a comment summary, no-op if telemetry was absent."""
+    if not cost_line:
+        return summary
+    return f"{summary}\n\n**Cost:** {cost_line}"
+
+
 def _redact_paths(text: str) -> str:
     """Strip local filesystem identifiers before sending text outside the host.
 
@@ -139,12 +146,11 @@ class Orchestrator:
             if not exec_result.ok:
                 log.info("executor_failed", issue=issue.number, exit_code=exec_result.exit_code)
                 tail = exec_result.stderr[-3000:] or exec_result.stdout[-3000:]
-                summary = (
+                summary = _with_cost(
                     f"Agent exited with code {exec_result.exit_code}.\n\n"
-                    f"```\n{_redact_paths(tail)}\n```"
+                    f"```\n{_redact_paths(tail)}\n```",
+                    cost_line,
                 )
-                if cost_line:
-                    summary = f"{summary}\n\n**Cost:** {cost_line}"
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
@@ -152,9 +158,10 @@ class Orchestrator:
             log.info("commits_ahead", issue=issue.number, count=commits, branch=wt.branch)
             if commits == 0:
                 log.info("no_commits", issue=issue.number)
-                summary = "Agent exited cleanly but produced no commits — nothing to ship."
-                if cost_line:
-                    summary = f"{summary}\n\n**Cost:** {cost_line}"
+                summary = _with_cost(
+                    "Agent exited cleanly but produced no commits — nothing to ship.",
+                    cost_line,
+                )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
@@ -184,9 +191,10 @@ class Orchestrator:
             log.info("pr_open_start", issue=issue.number, branch=wt.branch, title=pr_title)
             pr_url = self.gh.open_pr(issue.number, wt.branch, pr_title, pr_body)
             log.info("pr_opened", issue=issue.number, url=pr_url)
-            review_summary = f"PR opened with {commits} commit(s) on `{wt.branch}`."
-            if cost_line:
-                review_summary = f"{review_summary}\n\n**Cost:** {cost_line}"
+            review_summary = _with_cost(
+                f"PR opened with {commits} commit(s) on `{wt.branch}`.",
+                cost_line,
+            )
             self.gh.mark_review(issue.number, pr_url, review_summary)
             log.info("issue_marked_review", issue=issue.number)
 

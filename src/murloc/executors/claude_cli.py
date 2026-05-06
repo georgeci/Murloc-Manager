@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..logging_setup import get_logger
@@ -16,6 +17,55 @@ log = get_logger()
 
 _TAIL_CHAR_LIMIT = 200_000
 _QUEUE_POLL_SEC = 0.5
+
+
+@dataclass
+class _Telemetry:
+    cost_usd: float | None = None
+    usage: dict | None = None
+    duration_ms: int | None = None
+    num_turns: int | None = None
+    session_id: str | None = None
+
+
+def _parse_result_message(line: str) -> dict | None:
+    """Return the JSON payload of a stream-json `result` message, or None.
+
+    Lines that aren't JSON, aren't dicts, or aren't of type=result are ignored.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        msg = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(msg, dict) and msg.get("type") == "result":
+        return msg
+    return None
+
+
+def _extract_telemetry(payload: dict | None) -> _Telemetry:
+    """Pull cost/usage fields out of a stream-json `result` payload."""
+    t = _Telemetry()
+    if not isinstance(payload, dict):
+        return t
+    raw_cost = payload.get("total_cost_usd")
+    if isinstance(raw_cost, (int, float)):
+        t.cost_usd = float(raw_cost)
+    raw_usage = payload.get("usage")
+    if isinstance(raw_usage, dict):
+        t.usage = raw_usage
+    raw_dur = payload.get("duration_ms")
+    if isinstance(raw_dur, int):
+        t.duration_ms = raw_dur
+    raw_turns = payload.get("num_turns")
+    if isinstance(raw_turns, int):
+        t.num_turns = raw_turns
+    raw_sid = payload.get("session_id")
+    if isinstance(raw_sid, str):
+        t.session_id = raw_sid
+    return t
 
 
 def _ensure_stream_json(extra_args: list[str]) -> list[str]:
@@ -104,15 +154,9 @@ class ClaudeCliExecutor:
             while tail and tail_size > _TAIL_CHAR_LIMIT:
                 tail_size -= len(tail.popleft())
 
-            stripped = line.strip()
-            if stripped.startswith("{"):
-                try:
-                    msg = json.loads(stripped)
-                except json.JSONDecodeError:
-                    pass
-                else:
-                    if isinstance(msg, dict) and msg.get("type") == "result":
-                        result_payload = msg
+            maybe_result = _parse_result_message(line)
+            if maybe_result is not None:
+                result_payload = maybe_result
 
         try:
             proc.wait(timeout=5)
@@ -123,47 +167,26 @@ class ClaudeCliExecutor:
 
         duration = round(time.monotonic() - started, 2)
         output = "".join(tail)
-
-        cost_usd: float | None = None
-        usage: dict | None = None
-        duration_ms: int | None = None
-        num_turns: int | None = None
-        session_id: str | None = None
-        if isinstance(result_payload, dict):
-            raw_cost = result_payload.get("total_cost_usd")
-            if isinstance(raw_cost, (int, float)):
-                cost_usd = float(raw_cost)
-            raw_usage = result_payload.get("usage")
-            if isinstance(raw_usage, dict):
-                usage = raw_usage
-            raw_dur = result_payload.get("duration_ms")
-            if isinstance(raw_dur, int):
-                duration_ms = raw_dur
-            raw_turns = result_payload.get("num_turns")
-            if isinstance(raw_turns, int):
-                num_turns = raw_turns
-            raw_sid = result_payload.get("session_id")
-            if isinstance(raw_sid, str):
-                session_id = raw_sid
+        t = _extract_telemetry(result_payload)
 
         if timed_out:
             log.warning(
                 "claude_timeout",
                 duration_sec=duration,
                 timeout_sec=timeout_sec,
-                cost_usd=cost_usd,
-                num_turns=num_turns,
+                cost_usd=t.cost_usd,
+                num_turns=t.num_turns,
             )
             return ExecResult(
                 ok=False,
                 stdout=output,
                 stderr=f"Claude CLI timeout after {timeout_sec}s",
                 exit_code=124,
-                cost_usd=cost_usd,
-                usage=usage,
-                duration_ms=duration_ms,
-                num_turns=num_turns,
-                session_id=session_id,
+                cost_usd=t.cost_usd,
+                usage=t.usage,
+                duration_ms=t.duration_ms,
+                num_turns=t.num_turns,
+                session_id=t.session_id,
             )
 
         exit_code = proc.returncode if proc.returncode is not None else -1
@@ -172,18 +195,18 @@ class ClaudeCliExecutor:
             exit_code=exit_code,
             duration_sec=duration,
             output_chars=len(output),
-            cost_usd=cost_usd,
-            num_turns=num_turns,
-            session_id=session_id,
+            cost_usd=t.cost_usd,
+            num_turns=t.num_turns,
+            session_id=t.session_id,
         )
         return ExecResult(
             ok=exit_code == 0,
             stdout=output,
             stderr="",
             exit_code=exit_code,
-            cost_usd=cost_usd,
-            usage=usage,
-            duration_ms=duration_ms,
-            num_turns=num_turns,
-            session_id=session_id,
+            cost_usd=t.cost_usd,
+            usage=t.usage,
+            duration_ms=t.duration_ms,
+            num_turns=t.num_turns,
+            session_id=t.session_id,
         )
