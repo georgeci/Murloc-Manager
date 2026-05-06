@@ -54,7 +54,6 @@ class Orchestrator:
         worktrees: WorktreeManager,
         executor: Executor,
         executor_timeout_sec: int,
-        push_remote: str = "origin",
         smoke_prompt: bool = False,
         dry_run: bool = False,
     ) -> None:
@@ -62,7 +61,6 @@ class Orchestrator:
         self.worktrees = worktrees
         self.executor = executor
         self.executor_timeout_sec = executor_timeout_sec
-        self.push_remote = push_remote
         self.smoke_prompt = smoke_prompt
         self.dry_run = dry_run
 
@@ -131,7 +129,7 @@ class Orchestrator:
                 )
                 return TaskOutcome(issue.number, True, None, summary)
 
-            log.info("push_start", branch=wt.branch, remote=self.push_remote)
+            log.info("push_start", branch=wt.branch, remote=self.worktrees.push_remote)
             self._push(wt)
             log.info("push_done", branch=wt.branch)
 
@@ -210,7 +208,7 @@ class Orchestrator:
 
     def _push(self, wt: Worktree) -> None:
         subprocess.run(
-            ["git", "push", "-u", self.push_remote, wt.branch],
+            ["git", "push", "-u", self.worktrees.push_remote, wt.branch],
             cwd=str(wt.path),
             check=True,
             capture_output=True,
