@@ -83,6 +83,50 @@ def _ensure_stream_json(extra_args: list[str]) -> list[str]:
     return out
 
 
+def _drain_stream(
+    proc: subprocess.Popen,
+    q: queue.Queue,
+    deadline: float,
+) -> tuple[bool, deque[str], dict | None]:
+    """Pump the executor's stdout queue until EOF or the deadline lapses.
+
+    Mirrors each line to stderr (live progress for the human watching) and
+    keeps a bounded tail for failure reporting. Returns
+    `(timed_out, tail, result_payload)` — `result_payload` is the most recent
+    stream-json `result` message seen, or None if the run never emitted one.
+    Killing the process on timeout is the caller's contract via the queue.
+    """
+    tail: deque[str] = deque()
+    tail_size = 0
+    result_payload: dict | None = None
+    timed_out = False
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            proc.kill()
+            break
+        try:
+            line = q.get(timeout=min(_QUEUE_POLL_SEC, max(remaining, 0.05)))
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        sys.stderr.write(line)
+        sys.stderr.flush()
+        tail.append(line)
+        tail_size += len(line)
+        while tail and tail_size > _TAIL_CHAR_LIMIT:
+            tail_size -= len(tail.popleft())
+
+        maybe_result = _parse_result_message(line)
+        if maybe_result is not None:
+            result_payload = maybe_result
+
+    return timed_out, tail, result_payload
+
+
 class ClaudeCliExecutor:
     def __init__(self, command: str = "claude", extra_args: list[str] | None = None) -> None:
         self.command = command
@@ -123,40 +167,9 @@ class ClaudeCliExecutor:
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
 
-        # Bounded tail: append every line, but cap total stored chars so a
-        # very long agent run does not consume unbounded memory. The tail is
-        # only used for failure reporting; live output is streamed straight
-        # to stderr.
-        tail: deque[str] = deque()
-        tail_size = 0
-        timed_out = False
-        deadline = started + timeout_sec
-
-        # Telemetry from the final `result` message in stream-json output.
-        result_payload: dict | None = None
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                proc.kill()
-                break
-            try:
-                line = q.get(timeout=min(_QUEUE_POLL_SEC, max(remaining, 0.05)))
-            except queue.Empty:
-                continue
-            if line is None:
-                break
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            tail.append(line)
-            tail_size += len(line)
-            while tail and tail_size > _TAIL_CHAR_LIMIT:
-                tail_size -= len(tail.popleft())
-
-            maybe_result = _parse_result_message(line)
-            if maybe_result is not None:
-                result_payload = maybe_result
+        timed_out, tail, result_payload = _drain_stream(
+            proc, q, started + timeout_sec
+        )
 
         try:
             proc.wait(timeout=5)
