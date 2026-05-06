@@ -1,7 +1,7 @@
 # Which GitHub repo Murloc watches for agent:ready issues.
 [github]
-owner = "georgeci007"
-repo = "Murloc-Manager"
+owner = "georgeci"
+repo = "https://github.com/georgeci/Murloc-Manager"
 base_branch = "main"
 
 # Local checkout of that same repo. Murloc creates worktrees from here and

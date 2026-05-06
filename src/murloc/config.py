@@ -55,8 +55,22 @@ def load_settings(config_path: str | Path = "config.toml") -> Settings:
     with path.open("rb") as f:
         data = tomllib.load(f)
     settings = Settings.model_validate(data)
-    settings.github_token = os.getenv("GITHUB_TOKEN", "") or _gh_auth_token()
+    settings.github_token = _resolve_token() or _gh_auth_token()
     return settings
+
+
+_VALID_TOKEN_PREFIXES = ("ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_")
+
+
+def _resolve_token() -> str:
+    raw = os.getenv("GITHUB_TOKEN", "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(_VALID_TOKEN_PREFIXES):
+        return ""
+    if "your_token" in raw or "your-token" in raw:
+        return ""
+    return raw
 
 
 def _gh_auth_token() -> str:
