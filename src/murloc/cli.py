@@ -33,6 +33,7 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClien
         repo=settings.github.repo,
         base_branch=settings.github.base_branch,
         labels=labels,
+        dry_run=settings.runtime.dry_run,
     )
     wm = WorktreeManager(
         repo_root=Path(settings.paths.repo_root).resolve(),
@@ -48,6 +49,8 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClien
         worktrees=wm,
         executor=executor,
         executor_timeout_sec=settings.executor.timeout_sec,
+        smoke_prompt=settings.runtime.smoke_prompt,
+        dry_run=settings.runtime.dry_run,
     )
     return orch, gh
 
@@ -89,8 +92,10 @@ def run_once_cmd(ctx: click.Context) -> None:
         return
     issue = issues[0]
     click.echo(f"Picking issue #{issue.number}: {issue.title}")
+    log.info("run_once_pick", issue=issue.number, title=issue.title)
     outcome = orch.process(issue)
-    click.echo(f"Done. success={outcome.success} attempts={outcome.attempts} pr={outcome.pr_url}")
+    click.echo(f"Done. success={outcome.success} pr={outcome.pr_url}")
+    click.echo(outcome.summary)
 
 
 @main.command("poll")
@@ -107,10 +112,7 @@ def poll_cmd(ctx: click.Context, interval: int) -> None:
                 issue = issues[0]
                 click.echo(f"Picking issue #{issue.number}: {issue.title}")
                 outcome = orch.process(issue)
-                click.echo(
-                    f"Done. success={outcome.success} attempts={outcome.attempts} "
-                    f"pr={outcome.pr_url}"
-                )
+                click.echo(f"Done. success={outcome.success} pr={outcome.pr_url}")
             else:
                 log.debug("no_ready_issues")
         except Exception:

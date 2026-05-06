@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .executors.base import Executor
 from .github_client import GitHubClient, IssueRef
@@ -11,6 +13,20 @@ from .prompt_builder import build_initial
 from .worktree_manager import Worktree, WorktreeManager
 
 log = get_logger()
+
+
+def _redact_paths(text: str) -> str:
+    """Strip local filesystem identifiers before sending text to public GitHub.
+
+    Replaces $HOME with ~ and collapses any remaining absolute paths under
+    /Users/<name>/ or /home/<name>/ to /Users/<redacted>/ form so issue
+    comments don't leak the developer's username or directory layout.
+    """
+    home = str(Path.home())
+    out = text.replace(home, "~")
+    out = re.sub(r"/Users/[^/\s'\"]+", "/Users/<redacted>", out)
+    out = re.sub(r"/home/[^/\s'\"]+", "/home/<redacted>", out)
+    return out
 
 
 @dataclass
@@ -35,17 +51,23 @@ class Orchestrator:
         executor: Executor,
         executor_timeout_sec: int,
         push_remote: str = "origin",
+        smoke_prompt: bool = False,
+        dry_run: bool = False,
     ) -> None:
         self.gh = gh
         self.worktrees = worktrees
         self.executor = executor
         self.executor_timeout_sec = executor_timeout_sec
         self.push_remote = push_remote
+        self.smoke_prompt = smoke_prompt
+        self.dry_run = dry_run
 
     def process(self, issue: IssueRef) -> TaskOutcome:
+        log.info("claim_attempt", issue=issue.number, title=issue.title)
         if not self.gh.claim(issue.number):
             log.info("skip_not_claimable", issue=issue.number)
             return TaskOutcome(issue.number, False, None, "Could not claim issue")
+        log.info("claim_ok", issue=issue.number)
 
         type_ = classify(issue)
         log.info("classified", issue=issue.number, type=type_)
@@ -55,7 +77,10 @@ class Orchestrator:
             wt = self.worktrees.create(type_, issue.number, issue.title)
             log.info("worktree_created", issue=issue.number, path=str(wt.path), branch=wt.branch)
 
-            prompt = build_initial(issue)
+            log.info("prompt_build", issue=issue.number, smoke=self.smoke_prompt)
+            prompt = build_initial(issue, smoke=self.smoke_prompt)
+            log.info("prompt_built", issue=issue.number, chars=len(prompt))
+
             log.info("executor_run", issue=issue.number, branch=wt.branch)
             exec_result = self.executor.run(prompt, wt.path, self.executor_timeout_sec)
             log.info(
@@ -66,33 +91,74 @@ class Orchestrator:
             )
 
             if not exec_result.ok:
+                log.info("executor_failed", issue=issue.number, exit_code=exec_result.exit_code)
+                tail = exec_result.stderr[-3000:] or exec_result.stdout[-3000:]
                 summary = (
                     f"Agent exited with code {exec_result.exit_code}.\n\n"
-                    f"```\n{exec_result.stderr[-3000:] or exec_result.stdout[-3000:]}\n```"
+                    f"```\n{_redact_paths(tail)}\n```"
                 )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
             commits = self._commits_ahead(wt)
+            log.info("commits_ahead", issue=issue.number, count=commits, branch=wt.branch)
             if commits == 0:
+                log.info("no_commits", issue=issue.number)
                 summary = "Agent exited cleanly but produced no commits — nothing to ship."
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
-            self._push(wt)
             subject, body = self._first_commit_message(wt)
             pr_title = subject or f"{type_}: {issue.title}"
             pr_body = self._compose_pr_body(body, issue.number, commits)
+
+            if self.dry_run:
+                log.info(
+                    "dry_run_skip",
+                    issue=issue.number,
+                    branch=wt.branch,
+                    pr_title=pr_title,
+                    commits=commits,
+                )
+                summary = (
+                    f"[dry_run] {commits} commit(s) on `{wt.branch}`; "
+                    f"would push and open PR titled \"{pr_title}\". "
+                    f"Worktree left in place at {wt.path} for inspection."
+                )
+                return TaskOutcome(issue.number, True, None, summary)
+
+            log.info("push_start", branch=wt.branch, remote=self.push_remote)
+            self._push(wt)
+            log.info("push_done", branch=wt.branch)
+
+            log.info("pr_open_start", issue=issue.number, branch=wt.branch, title=pr_title)
             pr_url = self.gh.open_pr(issue.number, wt.branch, pr_title, pr_body)
+            log.info("pr_opened", issue=issue.number, url=pr_url)
             review_summary = f"PR opened with {commits} commit(s) on `{wt.branch}`."
             self.gh.mark_review(issue.number, pr_url, review_summary)
+            log.info("issue_marked_review", issue=issue.number)
 
             self.worktrees.cleanup(issue.number)
+            log.info("worktree_cleaned", issue=issue.number)
             return TaskOutcome(issue.number, True, pr_url, review_summary)
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or "").strip()
+            log.error(
+                "orchestrator_subprocess_error",
+                issue=issue.number,
+                cmd=e.cmd,
+                exit_code=e.returncode,
+                stderr=stderr,
+            )
+            detail = stderr or (e.stdout or "").strip() or f"exit code {e.returncode}"
+            public = _redact_paths(detail)
+            self.gh.mark_failed(issue.number, f"Orchestrator error: {public}")
+            return TaskOutcome(issue.number, False, None, f"Error: {public}")
         except Exception as e:
             log.exception("orchestrator_error", issue=issue.number)
-            self.gh.mark_failed(issue.number, f"Orchestrator error: {e!r}")
-            return TaskOutcome(issue.number, False, None, f"Error: {e!r}")
+            public = _redact_paths(repr(e))
+            self.gh.mark_failed(issue.number, f"Orchestrator error: {public}")
+            return TaskOutcome(issue.number, False, None, f"Error: {public}")
 
     @staticmethod
     def _compose_pr_body(agent_body: str, issue_number: int, commits: int) -> str:
