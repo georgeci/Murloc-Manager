@@ -84,29 +84,38 @@ murloc status
    the `gh` CLI authenticated (`gh auth login`) — Murloc falls back to
    `gh auth token` automatically.
 
-### Optional: drive Murloc from a Projects v2 Status field
+### Optional: drive Murloc from a Projects v2 board
 
-Murloc itself reads labels, not Project Status. If you prefer to drag
-cards between columns (Backlog → Ready → ...), add the included
-`Mirror Project Status to label` workflow. It polls every 5 minutes
-and ensures `agent:ready` reflects the Project's Status field.
+When `[github.project]` is configured in `config.toml`, Murloc reads the
+ready queue and flips statuses directly via GraphQL — no GitHub Actions
+workflow needed.
+
+Your project board's Status field must have these option names:
+
+| Status option | Murloc state |
+|---|---|
+| `Todo` | ready to pick up |
+| `In Progress` | claimed by agent |
+| `In Review` | PR opened, awaiting human merge |
+| `Failed` | agent failed or produced no commits |
 
 Setup:
 
-1. Create a fine-grained PAT:
-   - User permissions: **Projects: Read**
-   - Repository permissions (this repo): **Issues: Read & write**
-2. Add it as a repo secret named `PROJECT_TOKEN`.
-3. Set the repo variable `MURLOC_PROJECT_NUMBER` to your Project number
-   (e.g. 3 for `https://github.com/users/<you>/projects/3`).
-   Optional vars: `MURLOC_PROJECT_OWNER` (defaults to repo owner),
-   `MURLOC_READY_STATUS` (defaults to "Ready").
-4. The workflow file is at
-   [`.github/workflows/project-status-mirror.yml`](.github/workflows/project-status-mirror.yml).
-   Trigger it once manually (Actions → Run workflow) to confirm setup.
+1. Create a fine-grained PAT with **Projects: Read and write** (user
+   permission) and **Issues: Read & write** (repository permission). Set
+   it as `GITHUB_TOKEN` in `.env`.
+2. Add a `[github.project]` block to `config.toml` (see `config.example.toml`):
 
-The mirror is one-way and conflict-safe: it never touches issues that
-already carry `agent:running/review/failed`. Murloc still owns those.
+```toml
+[github.project]
+owner_type   = "user"
+number       = 3          # /users/<you>/projects/3
+status_field = "Status"   # name of the single-select field on the board
+```
+
+When `[github.project]` is present, labels (`agent:ready`, etc.) are no
+longer used for workflow state — they remain available for classification
+(e.g. `type:fix`, `type:chore`).
 
 ## Branch naming
 
@@ -138,6 +147,16 @@ ruff check .
 pytest -q
 ```
 
+### Debugging options
+
+Two `[runtime]` flags in `config.toml` help with local iteration:
+
+- `dry_run = true` — Murloc skips all writes to GitHub (no label swaps, no
+  comments, no PRs). The worktree and commits are left in place for inspection.
+- `smoke_prompt = true` — sends a trivial "read pyproject.toml and print one
+  line" prompt instead of the real issue prompt. Verifies the executor pipeline
+  end-to-end without asking the agent to do real work.
+
 ## Layout
 
 ```
@@ -145,7 +164,7 @@ src/murloc/
   cli.py               # click entry point
   config.py            # pydantic settings from config.toml + .env
   logging_setup.py     # structlog
-  github_client.py     # PyGithub wrapper, claim/PR/labels
+  github_client.py     # PyGithubClient (labels) + ProjectsV2Client (GraphQL)
   project_state.py     # label-FSM helpers
   worktree_manager.py  # git worktree per issue
   issue_classifier.py  # pick conventional commit type
