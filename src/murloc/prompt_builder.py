@@ -30,12 +30,26 @@ Rules:
 - Make the minimal diff that resolves the issue.
 - Do not perform unrelated refactors, formatting-only changes, or dependency upgrades.
 - Stay within this repository checkout.
+- Do NOT dispatch subagents (no Task tool, no Explore agent). Read files
+  directly with Read/Grep/Glob. The repo is small.
 - If the issue is unclear or you cannot resolve it cleanly, exit non-zero with an
   explanation on stderr — Murloc will mark the issue blocked.
 """
 
+SMOKE_PROMPT = """\
+Smoke test. Do exactly the following and stop:
 
-def build_initial(issue: IssueRef) -> str:
+1. Read pyproject.toml in the current working directory.
+2. Print one line of the form: "project=<name> python>=<version>"
+   using the values you read.
+3. Exit. Do not modify anything. Do not commit. Do not dispatch subagents
+   (no Task tool, no Explore agent). Use the Read tool directly.
+"""
+
+
+def build_initial(issue: IssueRef, smoke: bool = False) -> str:
+    if smoke:
+        return SMOKE_PROMPT
     return PROMPT_TEMPLATE.format(
         number=issue.number,
         title=issue.title,

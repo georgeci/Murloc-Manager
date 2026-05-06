@@ -51,12 +51,14 @@ class Orchestrator:
         executor: Executor,
         executor_timeout_sec: int,
         push_remote: str = "origin",
+        smoke_prompt: bool = False,
     ) -> None:
         self.gh = gh
         self.worktrees = worktrees
         self.executor = executor
         self.executor_timeout_sec = executor_timeout_sec
         self.push_remote = push_remote
+        self.smoke_prompt = smoke_prompt
 
     def process(self, issue: IssueRef) -> TaskOutcome:
         log.info("claim_attempt", issue=issue.number, title=issue.title)
@@ -73,8 +75,8 @@ class Orchestrator:
             wt = self.worktrees.create(type_, issue.number, issue.title)
             log.info("worktree_created", issue=issue.number, path=str(wt.path), branch=wt.branch)
 
-            log.info("prompt_build", issue=issue.number)
-            prompt = build_initial(issue)
+            log.info("prompt_build", issue=issue.number, smoke=self.smoke_prompt)
+            prompt = build_initial(issue, smoke=self.smoke_prompt)
             log.info("prompt_built", issue=issue.number, chars=len(prompt))
 
             log.info("executor_run", issue=issue.number, branch=wt.branch)

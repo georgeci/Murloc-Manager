@@ -33,6 +33,7 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClien
         repo=settings.github.repo,
         base_branch=settings.github.base_branch,
         labels=labels,
+        dry_run=settings.runtime.dry_run,
     )
     wm = WorktreeManager(
         repo_root=Path(settings.paths.repo_root).resolve(),
@@ -48,6 +49,7 @@ def _build_orchestrator(settings: Settings) -> tuple[Orchestrator, PyGithubClien
         worktrees=wm,
         executor=executor,
         executor_timeout_sec=settings.executor.timeout_sec,
+        smoke_prompt=settings.runtime.smoke_prompt,
     )
     return orch, gh
 
