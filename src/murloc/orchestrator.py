@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .executors.base import Executor
+from .executors.base import Executor, ExecResult
 from .github_client import GitHubClient, IssueRef
 from .issue_classifier import classify
 from .logging_setup import get_logger
@@ -13,6 +13,55 @@ from .prompt_builder import build_initial
 from .worktree_manager import Worktree, WorktreeManager
 
 log = get_logger()
+
+
+def _format_cost(result: ExecResult) -> str | None:
+    """Render a one-line cost summary from the executor's per-run telemetry,
+    or None if the executor did not report any. Goes into PR/issue comments,
+    so it stays compact and free of paths or other host-specific noise.
+    """
+    parts: list[str] = []
+    if result.cost_usd is not None:
+        parts.append(f"~${result.cost_usd:.4f}")
+
+    usage = result.usage or {}
+    in_tok = usage.get("input_tokens")
+    out_tok = usage.get("output_tokens")
+    cache_read = usage.get("cache_read_input_tokens")
+    cache_create = usage.get("cache_creation_input_tokens")
+    tok_bits: list[str] = []
+    if isinstance(in_tok, int):
+        tok_bits.append(f"in:{in_tok}")
+    if isinstance(out_tok, int):
+        tok_bits.append(f"out:{out_tok}")
+    if isinstance(cache_read, int) and cache_read:
+        tok_bits.append(f"cache_read:{cache_read}")
+    if isinstance(cache_create, int) and cache_create:
+        tok_bits.append(f"cache_creation:{cache_create}")
+    if tok_bits:
+        parts.append(" ".join(tok_bits))
+
+    if isinstance(result.num_turns, int):
+        parts.append(f"{result.num_turns} turns")
+
+    if isinstance(result.duration_ms, int):
+        secs = result.duration_ms / 1000
+        if secs >= 60:
+            m, s = divmod(int(secs), 60)
+            parts.append(f"{m}m{s:02d}s")
+        else:
+            parts.append(f"{secs:.1f}s")
+
+    if not parts:
+        return None
+    return " · ".join(parts)
+
+
+def _with_cost(summary: str, cost_line: str | None) -> str:
+    """Append a cost footer to a comment summary, no-op if telemetry was absent."""
+    if not cost_line:
+        return summary
+    return f"{summary}\n\n**Cost:** {cost_line}"
 
 
 def _redact_paths(text: str) -> str:
@@ -92,12 +141,15 @@ class Orchestrator:
                 exit_code=exec_result.exit_code,
             )
 
+            cost_line = _format_cost(exec_result)
+
             if not exec_result.ok:
                 log.info("executor_failed", issue=issue.number, exit_code=exec_result.exit_code)
                 tail = exec_result.stderr[-3000:] or exec_result.stdout[-3000:]
-                summary = (
+                summary = _with_cost(
                     f"Agent exited with code {exec_result.exit_code}.\n\n"
-                    f"```\n{_redact_paths(tail)}\n```"
+                    f"```\n{_redact_paths(tail)}\n```",
+                    cost_line,
                 )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
@@ -106,7 +158,10 @@ class Orchestrator:
             log.info("commits_ahead", issue=issue.number, count=commits, branch=wt.branch)
             if commits == 0:
                 log.info("no_commits", issue=issue.number)
-                summary = "Agent exited cleanly but produced no commits — nothing to ship."
+                summary = _with_cost(
+                    "Agent exited cleanly but produced no commits — nothing to ship.",
+                    cost_line,
+                )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
@@ -136,7 +191,10 @@ class Orchestrator:
             log.info("pr_open_start", issue=issue.number, branch=wt.branch, title=pr_title)
             pr_url = self.gh.open_pr(issue.number, wt.branch, pr_title, pr_body)
             log.info("pr_opened", issue=issue.number, url=pr_url)
-            review_summary = f"PR opened with {commits} commit(s) on `{wt.branch}`."
+            review_summary = _with_cost(
+                f"PR opened with {commits} commit(s) on `{wt.branch}`.",
+                cost_line,
+            )
             self.gh.mark_review(issue.number, pr_url, review_summary)
             log.info("issue_marked_review", issue=issue.number)
 
