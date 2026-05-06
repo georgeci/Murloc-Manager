@@ -84,6 +84,30 @@ murloc status
    the `gh` CLI authenticated (`gh auth login`) — Murloc falls back to
    `gh auth token` automatically.
 
+### Optional: drive Murloc from a Projects v2 Status field
+
+Murloc itself reads labels, not Project Status. If you prefer to drag
+cards between columns (Backlog → Ready → ...), add the included
+`Mirror Project Status to label` workflow. It polls every 5 minutes
+and ensures `agent:ready` reflects the Project's Status field.
+
+Setup:
+
+1. Create a fine-grained PAT:
+   - User permissions: **Projects: Read**
+   - Repository permissions (this repo): **Issues: Read & write**
+2. Add it as a repo secret named `PROJECT_TOKEN`.
+3. Set the repo variable `MURLOC_PROJECT_NUMBER` to your Project number
+   (e.g. 3 for `https://github.com/users/<you>/projects/3`).
+   Optional vars: `MURLOC_PROJECT_OWNER` (defaults to repo owner),
+   `MURLOC_READY_STATUS` (defaults to "Ready").
+4. The workflow file is at
+   [`.github/workflows/project-status-mirror.yml`](.github/workflows/project-status-mirror.yml).
+   Trigger it once manually (Actions → Run workflow) to confirm setup.
+
+The mirror is one-way and conflict-safe: it never touches issues that
+already carry `agent:running/review/failed`. Murloc still owns those.
+
 ## Branch naming
 
 Murloc picks a conventional commit type using this order:

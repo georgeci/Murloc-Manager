@@ -1,0 +1,124 @@
+name: Mirror Project Status to label
+
+# Mirrors a user-owned Projects v2 "Status" field onto the `agent:ready` label
+# so Murloc Manager (which polls labels) reacts to status transitions.
+#
+# Scheduled because the `projects_v2_item` event does not fire for user-owned
+# Projects v2. For org-owned projects you'd use that event directly.
+#
+# Setup:
+#   1. Create a fine-grained PAT with these permissions:
+#        - User permissions: Projects: Read
+#        - Repository permissions (this repo): Issues: Read & write
+#      Save it as repo secret  PROJECT_TOKEN
+#   2. Set the repo variable  MURLOC_PROJECT_NUMBER  to your Project number
+#      (e.g. 3 for https://github.com/users/<you>/projects/3).
+#      Optional: MURLOC_PROJECT_OWNER (defaults to repo owner),
+#                MURLOC_READY_STATUS (defaults to "Ready").
+#
+# Behavior (idempotent, conflict-safe with Murloc):
+#   - Status == Ready  AND issue has no agent:* label  → add agent:ready
+#   - Status != Ready  AND issue has only agent:ready  → remove agent:ready
+#   - Otherwise leave alone (Murloc owns running/review/failed labels).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      OWNER: ${{ vars.MURLOC_PROJECT_OWNER || github.repository_owner }}
+      PROJECT_NUMBER: ${{ vars.MURLOC_PROJECT_NUMBER }}
+      READY_STATUS: ${{ vars.MURLOC_READY_STATUS || 'Ready' }}
+      READY_LABEL: "agent:ready"
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Validate config
+        run: |
+          if [ -z "$PROJECT_NUMBER" ]; then
+            echo "::error::MURLOC_PROJECT_NUMBER repo variable is not set."
+            exit 1
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PROJECT_TOKEN secret is not set."
+            exit 1
+          fi
+
+      - name: Fetch project items
+        run: |
+          set -euo pipefail
+          gh api graphql \
+            -F login="$OWNER" \
+            -F number="$PROJECT_NUMBER" \
+            -f query='
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    items(first: 100) {
+                      nodes {
+                        fieldValues(first: 20) {
+                          nodes {
+                            ... on ProjectV2ItemFieldSingleSelectValue {
+                              name
+                              field { ... on ProjectV2FieldCommon { name } }
+                            }
+                          }
+                        }
+                        content {
+                          ... on Issue {
+                            number
+                            state
+                            repository { nameWithOwner }
+                            labels(first: 30) { nodes { name } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' > items.json
+          echo "fetched $(jq '.data.user.projectV2.items.nodes | length' items.json) project items"
+
+      - name: Apply label mirror
+        run: |
+          set -euo pipefail
+          jq -c --arg repo "$REPO" '
+            .data.user.projectV2.items.nodes[]
+            | select(.content != null)
+            | select(.content.repository.nameWithOwner == $repo)
+            | select(.content.state == "OPEN")
+            | {
+                num: .content.number,
+                status: ([.fieldValues.nodes[]? | select(.field.name == "Status") | .name][0] // ""),
+                agent_count: ([.content.labels.nodes[].name | select(startswith("agent:"))] | length),
+                has_ready: ([.content.labels.nodes[].name] | any(. == "agent:ready"))
+              }
+          ' items.json > rows.json
+
+          count=$(wc -l < rows.json | tr -d ' ')
+          echo "scanning $count issue items in $REPO"
+
+          while IFS= read -r row; do
+            num=$(jq -r '.num' <<<"$row")
+            status=$(jq -r '.status' <<<"$row")
+            agent_count=$(jq -r '.agent_count' <<<"$row")
+            has_ready=$(jq -r '.has_ready' <<<"$row")
+
+            if [ "$status" = "$READY_STATUS" ] && [ "$agent_count" = "0" ]; then
+              echo "  #$num: status='$status', no agent labels → add $READY_LABEL"
+              gh api -X POST -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/issues/$num/labels" \
+                -f "labels[]=$READY_LABEL" >/dev/null
+            elif [ "$status" != "$READY_STATUS" ] && [ "$has_ready" = "true" ] && [ "$agent_count" = "1" ]; then
+              echo "  #$num: status='$status', only agent:ready set → remove $READY_LABEL"
+              gh api -X DELETE -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/issues/$num/labels/$READY_LABEL" >/dev/null
+            fi
+          done < rows.json
