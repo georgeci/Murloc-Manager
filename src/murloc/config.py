@@ -64,7 +64,6 @@ class Settings(BaseModel):
     paths: PathsCfg = Field(default_factory=PathsCfg)
 
     github_token: str = ""
-    anthropic_api_key: str = ""
 
 
 def load_settings(config_path: str | Path = "config.toml") -> Settings:
@@ -78,5 +77,4 @@ def load_settings(config_path: str | Path = "config.toml") -> Settings:
         data = tomllib.load(f)
     settings = Settings.model_validate(data)
     settings.github_token = os.getenv("GITHUB_TOKEN", "")
-    settings.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
     return settings
