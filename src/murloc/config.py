@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -28,8 +29,8 @@ class ProjectCfg(BaseModel):
 
 
 class GithubCfg(BaseModel):
-    owner: str
-    repo: str
+    owner: str | None = None
+    repo: str | None = None
     base_branch: str = "main"
     project: ProjectCfg | None = None
 
@@ -80,7 +81,91 @@ def load_settings(config_path: str | Path = "config.toml") -> Settings:
         data = tomllib.load(f)
     settings = Settings.model_validate(data)
     settings.github_token = _resolve_token() or _gh_auth_token()
+
+    # Env vars override config file, but both are "explicit" and beat auto-detect.
+    if not settings.github.owner:
+        env_owner = os.getenv("GITHUB_OWNER", "").strip()
+        if env_owner:
+            settings.github.owner = env_owner
+    if not settings.github.repo:
+        env_repo = os.getenv("GITHUB_REPO", "").strip()
+        if env_repo:
+            settings.github.repo = env_repo
+
+    # Auto-detect from git remote when either value is still missing.
+    if not settings.github.owner or not settings.github.repo:
+        detected_owner, detected_repo = _detect_github_owner_repo(settings.paths.repo_root)
+        if not settings.github.owner:
+            settings.github.owner = detected_owner
+        if not settings.github.repo:
+            settings.github.repo = detected_repo
+
     return settings
+
+
+_GITHUB_URL_RE = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$"
+)
+
+
+def _parse_github_url(url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) from a GitHub remote URL, or None if not a GitHub URL."""
+    m = _GITHUB_URL_RE.match(url)
+    if not m:
+        return None
+    return m.group("owner"), m.group("repo")
+
+
+def _detect_github_owner_repo(repo_root: str) -> tuple[str, str]:
+    """Auto-detect GitHub owner and repo from the 'origin' remote of a local repo."""
+    root = Path(repo_root).resolve()
+    try:
+        proc = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "git executable not found; set github.owner/repo explicitly"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"timed out running 'git remote get-url origin' in {root}; "
+            "set github.owner/repo explicitly"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"failed to run git in {root}: {exc}; set github.owner/repo explicitly"
+        ) from exc
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        stderr_lower = stderr.lower()
+        if "not a git repository" in stderr_lower:
+            raise ValueError(
+                f"not a git repository at {root}; set github.owner/repo explicitly"
+            )
+        if "no such remote" in stderr_lower or "no such remote 'origin'" in stderr_lower:
+            raise ValueError(
+                "git remote 'origin' is not configured; set github.owner/repo explicitly"
+            )
+        raise ValueError(
+            f"git remote get-url origin failed: {stderr or '(no stderr)'}; "
+            "set github.owner/repo explicitly"
+        )
+
+    url = proc.stdout.strip()
+    result = _parse_github_url(url)
+    if result is None:
+        raise ValueError(
+            f"remote 'origin' is not a GitHub URL: {url}; set github.owner/repo explicitly"
+        )
+    return result
 
 
 _VALID_TOKEN_PREFIXES = ("ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_")
