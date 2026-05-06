@@ -172,3 +172,45 @@ def test_branch_type_falls_back_to_chore(
     assert outcome.success is True
     assert gh.prs_opened[0][1].startswith("chore/issue-12-")
     assert gh.prs_opened[0][2] == "random subject"
+
+
+class TestComposePrBody:
+    def test_with_agent_body_includes_body_and_footer(self) -> None:
+        body = Orchestrator._compose_pr_body("Great work done.", 42, 3)
+        assert "Great work done." in body
+        assert "Resolves #42" in body
+        assert "3 commit(s)" in body
+
+    def test_without_agent_body_only_footer(self) -> None:
+        body = Orchestrator._compose_pr_body("", 7, 1)
+        assert "Resolves #7" in body
+        assert "1 commit(s)" in body
+
+    def test_whitespace_only_body_treated_as_empty(self) -> None:
+        body = Orchestrator._compose_pr_body("   \n  ", 1, 1)
+        assert "Resolves #1" in body
+        # Only the footer should appear — no stray blank lines from the agent body
+        assert body.startswith("---\n")
+
+    def test_agent_body_is_separated_from_footer(self) -> None:
+        body = Orchestrator._compose_pr_body("My description.", 5, 2)
+        assert body.index("My description.") < body.index("Resolves #5")
+
+
+def test_claim_failure_returns_not_success(
+    repo_with_remote: tuple[Path, Path], tmp_path: Path
+) -> None:
+    repo, _ = repo_with_remote
+    executor = FakeExecutor()
+
+    class UnclaimableGh(FakeGh):
+        def claim(self, issue_number: int) -> bool:
+            return False
+
+    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
+    orch = Orchestrator(gh=UnclaimableGh(), worktrees=wm, executor=executor, executor_timeout_sec=60)
+    issue = IssueRef(number=99, title="x", body="", labels=[], html_url="x")
+    outcome = orch.process(issue)
+
+    assert outcome.success is False
+    assert outcome.pr_url is None
