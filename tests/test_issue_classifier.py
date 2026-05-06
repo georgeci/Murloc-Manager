@@ -31,3 +31,26 @@ def test_classify_label_overrides_title() -> None:
 
 def test_classify_unknown_type_label_falls_through_to_title() -> None:
     assert classify(_issue(title="docs: readme", labels=["type:nonsense"])) == "docs"
+
+
+def test_classify_all_known_type_labels() -> None:
+    known = ("feat", "fix", "chore", "refactor", "test", "docs", "style", "ci", "build", "perf")
+    for t in known:
+        assert classify(_issue(labels=[f"type:{t}"])) == t
+
+
+def test_classify_bare_label_case_insensitive() -> None:
+    assert classify(_issue(labels=["FIX"])) == "fix"
+    assert classify(_issue(labels=["FEAT"])) == "feat"
+
+
+def test_classify_title_with_scope() -> None:
+    assert classify(_issue(title="refactor(auth): clean up tokens")) == "refactor"
+
+
+def test_classify_label_over_unknown_type_label() -> None:
+    assert classify(_issue(title="x", labels=["type:unknown", "fix"])) == "fix"
+
+
+def test_classify_empty_labels_and_title() -> None:
+    assert classify(_issue(title="", labels=[])) == "chore"

@@ -48,3 +48,23 @@ def test_create_when_path_exists_recreates(repo: Path, tmp_path: Path) -> None:
     assert wt2.path.exists()
     assert wt2.branch.startswith("feat/")
     wm.cleanup(1)
+
+
+def test_branch_name(repo: Path, tmp_path: Path) -> None:
+    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
+    assert wm.branch_name("feat", 10, "Add cool feature") == "feat/issue-10-add-cool-feature"
+    assert wm.branch_name("fix", 99, "Fix the bug!!") == "fix/issue-99-fix-the-bug"
+
+
+def test_list_worktrees_empty_when_dir_missing(repo: Path, tmp_path: Path) -> None:
+    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
+    assert wm.list_worktrees() == []
+
+
+def test_list_worktrees_after_create(repo: Path, tmp_path: Path) -> None:
+    wm = WorktreeManager(repo_root=repo, worktrees_root=tmp_path / "wt", base_branch="main")
+    wm.create("fix", 5, "Fix the bug")
+    paths = wm.list_worktrees()
+    assert len(paths) == 1
+    assert paths[0].name == "issue-5"
+    wm.cleanup(5)
