@@ -89,8 +89,10 @@ def run_once_cmd(ctx: click.Context) -> None:
         return
     issue = issues[0]
     click.echo(f"Picking issue #{issue.number}: {issue.title}")
+    log.info("run_once_pick", issue=issue.number, title=issue.title)
     outcome = orch.process(issue)
-    click.echo(f"Done. success={outcome.success} attempts={outcome.attempts} pr={outcome.pr_url}")
+    click.echo(f"Done. success={outcome.success} pr={outcome.pr_url}")
+    click.echo(outcome.summary)
 
 
 @main.command("poll")
@@ -107,10 +109,7 @@ def poll_cmd(ctx: click.Context, interval: int) -> None:
                 issue = issues[0]
                 click.echo(f"Picking issue #{issue.number}: {issue.title}")
                 outcome = orch.process(issue)
-                click.echo(
-                    f"Done. success={outcome.success} attempts={outcome.attempts} "
-                    f"pr={outcome.pr_url}"
-                )
+                click.echo(f"Done. success={outcome.success} pr={outcome.pr_url}")
             else:
                 log.debug("no_ready_issues")
         except Exception:

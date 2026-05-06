@@ -43,9 +43,11 @@ class Orchestrator:
         self.push_remote = push_remote
 
     def process(self, issue: IssueRef) -> TaskOutcome:
+        log.info("claim_attempt", issue=issue.number, title=issue.title)
         if not self.gh.claim(issue.number):
             log.info("skip_not_claimable", issue=issue.number)
             return TaskOutcome(issue.number, False, None, "Could not claim issue")
+        log.info("claim_ok", issue=issue.number)
 
         type_ = classify(issue)
         log.info("classified", issue=issue.number, type=type_)
@@ -55,7 +57,10 @@ class Orchestrator:
             wt = self.worktrees.create(type_, issue.number, issue.title)
             log.info("worktree_created", issue=issue.number, path=str(wt.path), branch=wt.branch)
 
+            log.info("prompt_build", issue=issue.number)
             prompt = build_initial(issue)
+            log.info("prompt_built", issue=issue.number, chars=len(prompt))
+
             log.info("executor_run", issue=issue.number, branch=wt.branch)
             exec_result = self.executor.run(prompt, wt.path, self.executor_timeout_sec)
             log.info(
@@ -66,6 +71,7 @@ class Orchestrator:
             )
 
             if not exec_result.ok:
+                log.info("executor_failed", issue=issue.number, exit_code=exec_result.exit_code)
                 summary = (
                     f"Agent exited with code {exec_result.exit_code}.\n\n"
                     f"```\n{exec_result.stderr[-3000:] or exec_result.stdout[-3000:]}\n```"
@@ -74,21 +80,42 @@ class Orchestrator:
                 return TaskOutcome(issue.number, False, None, summary)
 
             commits = self._commits_ahead(wt)
+            log.info("commits_ahead", issue=issue.number, count=commits, branch=wt.branch)
             if commits == 0:
+                log.info("no_commits", issue=issue.number)
                 summary = "Agent exited cleanly but produced no commits — nothing to ship."
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, None, summary)
 
+            log.info("push_start", branch=wt.branch, remote=self.push_remote)
             self._push(wt)
+            log.info("push_done", branch=wt.branch)
+
             subject, body = self._first_commit_message(wt)
             pr_title = subject or f"{type_}: {issue.title}"
             pr_body = self._compose_pr_body(body, issue.number, commits)
+            log.info("pr_open_start", issue=issue.number, branch=wt.branch, title=pr_title)
             pr_url = self.gh.open_pr(issue.number, wt.branch, pr_title, pr_body)
+            log.info("pr_opened", issue=issue.number, url=pr_url)
             review_summary = f"PR opened with {commits} commit(s) on `{wt.branch}`."
             self.gh.mark_review(issue.number, pr_url, review_summary)
+            log.info("issue_marked_review", issue=issue.number)
 
             self.worktrees.cleanup(issue.number)
+            log.info("worktree_cleaned", issue=issue.number)
             return TaskOutcome(issue.number, True, pr_url, review_summary)
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or "").strip()
+            log.error(
+                "orchestrator_subprocess_error",
+                issue=issue.number,
+                cmd=e.cmd,
+                exit_code=e.returncode,
+                stderr=stderr,
+            )
+            detail = stderr or (e.stdout or "").strip() or repr(e)
+            self.gh.mark_failed(issue.number, f"Orchestrator error: {detail}")
+            return TaskOutcome(issue.number, False, None, f"Error: {detail}")
         except Exception as e:
             log.exception("orchestrator_error", issue=issue.number)
             self.gh.mark_failed(issue.number, f"Orchestrator error: {e!r}")

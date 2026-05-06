@@ -21,13 +21,24 @@ def _slug(text: str, max_len: int = 40) -> str:
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    proc = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode,
+            cmd,
+            output=proc.stdout,
+            stderr=(
+                f"{proc.stderr.strip()}\n"
+                f"(cmd: {' '.join(cmd)}; cwd: {cwd})"
+            ),
+        )
+    return proc
 
 
 class WorktreeManager:
@@ -46,7 +57,7 @@ class WorktreeManager:
         if wt_path.exists():
             self.cleanup(issue_number)
         _run(
-            ["git", "worktree", "add", "-b", branch, str(wt_path), self.base_branch],
+            ["git", "worktree", "add", "-B", branch, str(wt_path), self.base_branch],
             cwd=self.repo_root,
         )
         return Worktree(issue_number=issue_number, branch=branch, path=wt_path)
