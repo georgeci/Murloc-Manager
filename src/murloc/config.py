@@ -129,18 +129,34 @@ def _detect_github_owner_repo(repo_root: str) -> tuple[str, str]:
             text=True,
             timeout=5,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except FileNotFoundError as exc:
         raise ValueError(
-            f"not a git repository at {root}; set github.owner/repo explicitly"
+            "git executable not found; set github.owner/repo explicitly"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"timed out running 'git remote get-url origin' in {root}; "
+            "set github.owner/repo explicitly"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"failed to run git in {root}: {exc}; set github.owner/repo explicitly"
         ) from exc
 
     if proc.returncode != 0:
-        if "not a git repository" in proc.stderr.lower():
+        stderr = proc.stderr.strip()
+        stderr_lower = stderr.lower()
+        if "not a git repository" in stderr_lower:
             raise ValueError(
                 f"not a git repository at {root}; set github.owner/repo explicitly"
             )
+        if "no such remote" in stderr_lower or "no such remote 'origin'" in stderr_lower:
+            raise ValueError(
+                "git remote 'origin' is not configured; set github.owner/repo explicitly"
+            )
         raise ValueError(
-            "git remote 'origin' is not configured; set github.owner/repo explicitly"
+            f"git remote get-url origin failed: {stderr or '(no stderr)'}; "
+            "set github.owner/repo explicitly"
         )
 
     url = proc.stdout.strip()

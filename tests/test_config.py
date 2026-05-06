@@ -99,7 +99,11 @@ class TestLoadSettings:
         cfg = tmp_path / "config.toml"
         cfg.write_text('[github]\nowner = "myorg"\nrepo = "myrepo"\n')
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        # Auto-detect is never called because owner and repo are already set.
+
+        def _fail(*_args, **_kwargs):
+            pytest.fail("auto-detect must not run when config provides owner/repo")
+
+        monkeypatch.setattr("murloc.config._detect_github_owner_repo", _fail)
         settings = load_settings(cfg)
         assert settings.github.owner == "myorg"
         assert settings.github.repo == "myrepo"
@@ -112,7 +116,11 @@ class TestLoadSettings:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.setenv("GITHUB_OWNER", "envowner")
         monkeypatch.setenv("GITHUB_REPO", "envrepo")
-        # subprocess.run should never be reached since env vars supply both values.
+
+        def _fail(*_args, **_kwargs):
+            pytest.fail("auto-detect must not run when env vars supply owner/repo")
+
+        monkeypatch.setattr("murloc.config._detect_github_owner_repo", _fail)
         settings = load_settings(cfg)
         assert settings.github.owner == "envowner"
         assert settings.github.repo == "envrepo"
@@ -191,4 +199,30 @@ class TestDetectGithubOwnerRepo:
             self._fake_run(0, "https://gitlab.com/alice/myrepo\n"),
         )
         with pytest.raises(ValueError, match="not a GitHub URL"):
+            _detect_github_owner_repo(str(tmp_path))
+
+    def test_git_not_installed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _raise(*_args, **_kwargs):
+            raise FileNotFoundError(2, "No such file or directory: 'git'")
+
+        monkeypatch.setattr("murloc.config.subprocess.run", _raise)
+        with pytest.raises(ValueError, match="git executable not found"):
+            _detect_github_owner_repo(str(tmp_path))
+
+    def test_subprocess_timeout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _raise(*_args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=kwargs.get("timeout", 5))
+
+        monkeypatch.setattr("murloc.config.subprocess.run", _raise)
+        with pytest.raises(ValueError, match="timed out"):
+            _detect_github_owner_repo(str(tmp_path))
+
+    def test_unknown_git_failure_surfaces_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "murloc.config.subprocess.run",
+            self._fake_run(1, "", "fatal: some other git error"),
+        )
+        with pytest.raises(ValueError, match="some other git error"):
             _detect_github_owner_repo(str(tmp_path))
