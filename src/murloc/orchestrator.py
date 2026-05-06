@@ -37,7 +37,7 @@ def _format_cost(result: ExecResult) -> str | None:
     if isinstance(cache_read, int) and cache_read:
         tok_bits.append(f"cache_read:{cache_read}")
     if isinstance(cache_create, int) and cache_create:
-        tok_bits.append(f"cache_write:{cache_create}")
+        tok_bits.append(f"cache_creation:{cache_create}")
     if tok_bits:
         parts.append(" ".join(tok_bits))
 
