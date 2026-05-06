@@ -23,3 +23,12 @@ kind = "claude_cli"
 command = "claude"
 extra_args = ["--print", "--permission-mode=acceptEdits"]
 timeout_sec = 1800
+
+[runtime]
+# dry_run: when true, Murloc does NOT write to GitHub — no label swaps,
+# no failure/review comments. Use for local debugging.
+dry_run = false
+# smoke_prompt: when true, send a trivial "read pyproject.toml" prompt
+# instead of the real issue prompt. Verifies the executor works end-to-end
+# without asking the agent to actually code.
+smoke_prompt = false

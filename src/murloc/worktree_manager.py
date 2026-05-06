@@ -21,13 +21,21 @@ def _slug(text: str, max_len: int = 40) -> str:
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    proc = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode,
+            cmd,
+            output=proc.stdout,
+            stderr=proc.stderr,
+        )
+    return proc
 
 
 class WorktreeManager:
@@ -43,24 +51,26 @@ class WorktreeManager:
         branch = self.branch_name(type_, issue_number, title)
         wt_path = self.worktrees_root / f"issue-{issue_number}"
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
-        if wt_path.exists():
-            self.cleanup(issue_number)
+        self.cleanup(issue_number)
         _run(
-            ["git", "worktree", "add", "-b", branch, str(wt_path), self.base_branch],
+            ["git", "worktree", "add", "-B", branch, str(wt_path), self.base_branch],
             cwd=self.repo_root,
         )
         return Worktree(issue_number=issue_number, branch=branch, path=wt_path)
 
     def cleanup(self, issue_number: int) -> None:
+        """Remove worktree dir and drop it from git's registry.
+
+        Runs unconditionally — git may still have the worktree registered
+        even after the directory was deleted out-of-band.
+        """
         wt_path = self.worktrees_root / f"issue-{issue_number}"
-        if not wt_path.exists():
-            return
-        try:
+        with contextlib.suppress(subprocess.CalledProcessError):
             _run(["git", "worktree", "remove", "--force", str(wt_path)], cwd=self.repo_root)
-        except subprocess.CalledProcessError:
+        if wt_path.exists():
             shutil.rmtree(wt_path, ignore_errors=True)
-            with contextlib.suppress(subprocess.CalledProcessError):
-                _run(["git", "worktree", "prune"], cwd=self.repo_root)
+        with contextlib.suppress(subprocess.CalledProcessError):
+            _run(["git", "worktree", "prune"], cwd=self.repo_root)
 
     def list_worktrees(self) -> list[Path]:
         if not self.worktrees_root.exists():

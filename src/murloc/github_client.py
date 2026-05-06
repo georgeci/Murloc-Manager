@@ -34,11 +34,13 @@ class PyGithubClient:
         repo: str,
         base_branch: str,
         labels: LabelMap,
+        dry_run: bool = False,
     ) -> None:
         self._gh = Github(token)
         self._repo = self._gh.get_repo(f"{owner}/{repo}")
         self._base_branch = base_branch
         self._labels = labels
+        self._dry_run = dry_run
 
     def _to_ref(self, issue: Issue) -> IssueRef:
         return IssueRef(
@@ -60,22 +62,30 @@ class PyGithubClient:
             return False
         if self._labels.ready not in names:
             return False
+        if self._dry_run:
+            return True
         new_labels = (names - {self._labels.ready}) | {self._labels.running}
         issue.set_labels(*new_labels)
         return True
 
     def _swap_label(self, issue_number: int, new_label: str) -> None:
+        if self._dry_run:
+            return
         issue = self._repo.get_issue(issue_number)
         names = {lbl.name for lbl in issue.labels} - self._labels.all_agent_labels()
         names.add(new_label)
         issue.set_labels(*names)
 
     def mark_review(self, issue_number: int, pr_url: str, summary: str) -> None:
+        if self._dry_run:
+            return
         issue = self._repo.get_issue(issue_number)
         issue.create_comment(f"Mrglglgl! PR ready for review: {pr_url}\n\n{summary}")
         self._swap_label(issue_number, self._labels.review)
 
     def mark_failed(self, issue_number: int, summary: str) -> None:
+        if self._dry_run:
+            return
         issue = self._repo.get_issue(issue_number)
         issue.create_comment(f"Mrglgl... agent failed.\n\n{summary}")
         self._swap_label(issue_number, self._labels.failed)

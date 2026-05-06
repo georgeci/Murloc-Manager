@@ -36,11 +36,17 @@ class PathsCfg(BaseModel):
     repo_root: str = "."
 
 
+class RuntimeCfg(BaseModel):
+    dry_run: bool = False
+    smoke_prompt: bool = False
+
+
 class Settings(BaseModel):
     github: GithubCfg
     labels: LabelsCfg = Field(default_factory=LabelsCfg)
     executor: ExecutorCfg = Field(default_factory=ExecutorCfg)
     paths: PathsCfg = Field(default_factory=PathsCfg)
+    runtime: RuntimeCfg = Field(default_factory=RuntimeCfg)
 
     github_token: str = ""
 
