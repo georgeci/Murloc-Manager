@@ -53,7 +53,7 @@ murloc status
 ### GitHub setup (one-time)
 
 1. Create labels: `agent:ready`, `agent:running`, `agent:review`,
-   `agent:failed`, `agent:blocked`, `agent:manual`.
+   `agent:failed`, `agent:blocked`.
 2. Branch protection on `main`: require PR review (only you merge).
 3. `GITHUB_TOKEN` with `repo` scope in `.env`.
 

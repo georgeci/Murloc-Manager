@@ -55,6 +55,10 @@ class Orchestrator:
             base_prompt = build_initial(issue, self.check_commands)
             prompt = base_prompt
             last_check: CheckResult | None = None
+            last_failure_command = ""
+            last_failure_stdout = ""
+            last_failure_stderr = ""
+            attempt_ok = False
             attempt = 0
 
             while True:
@@ -69,36 +73,52 @@ class Orchestrator:
                     exit_code=exec_result.exit_code,
                 )
 
-                last_check = run_checks(self.check_commands, wt.path)
-                log.info(
-                    "checks_done",
-                    issue=issue.number,
-                    attempt=attempt,
-                    ok=last_check.ok,
-                    command=last_check.command,
-                )
+                if not exec_result.ok:
+                    # Executor itself failed (CLI error / timeout). Don't trust the worktree
+                    # state; treat this attempt as a failure regardless of checks.
+                    last_failure_command = (
+                        f"executor:{type(self.executor).__name__} (exit {exec_result.exit_code})"
+                    )
+                    last_failure_stdout = exec_result.stdout
+                    last_failure_stderr = exec_result.stderr
+                    last_check = None
+                    attempt_ok = False
+                else:
+                    last_check = run_checks(self.check_commands, wt.path)
+                    log.info(
+                        "checks_done",
+                        issue=issue.number,
+                        attempt=attempt,
+                        ok=last_check.ok,
+                        command=last_check.command,
+                    )
+                    if last_check.ok:
+                        attempt_ok = True
+                        break
+                    last_failure_command = last_check.command
+                    last_failure_stdout = last_check.stdout
+                    last_failure_stderr = last_check.stderr
+                    attempt_ok = False
 
-                if last_check.ok:
-                    break
                 if not self.retry.should_retry(attempt):
                     break
                 prompt = build_retry(
                     base_prompt,
                     attempt=attempt,
-                    command=last_check.command,
-                    stdout=last_check.stdout,
-                    stderr=last_check.stderr,
+                    command=last_failure_command,
+                    stdout=last_failure_stdout,
+                    stderr=last_failure_stderr,
                 )
 
-            assert last_check is not None
-            if not last_check.ok:
+            if not attempt_ok:
                 summary = (
                     f"Failed after {attempt} attempt(s).\n"
-                    f"Last command: `{last_check.command}`\n\n"
-                    f"```\n{last_check.stderr[-3000:] or last_check.stdout[-3000:]}\n```"
+                    f"Last failure: `{last_failure_command}`\n\n"
+                    f"```\n{last_failure_stderr[-3000:] or last_failure_stdout[-3000:]}\n```"
                 )
                 self.gh.mark_failed(issue.number, summary)
                 return TaskOutcome(issue.number, False, attempt, None, summary)
+            assert last_check is not None  # attempt_ok implies checks ran and passed
 
             self._push(wt)
             pr_title = f"[#{issue.number}] {issue.title}"

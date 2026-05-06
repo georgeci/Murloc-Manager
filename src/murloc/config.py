@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class GithubCfg(BaseModel):
@@ -34,7 +34,20 @@ class RetryCfg(BaseModel):
 
 
 class ChecksCfg(BaseModel):
-    commands: list[list[str]] = Field(default_factory=list)
+    commands: list[list[str]]
+
+    @field_validator("commands")
+    @classmethod
+    def _non_empty(cls, v: list[list[str]]) -> list[list[str]]:
+        if not v:
+            raise ValueError(
+                "checks.commands must contain at least one command "
+                "(e.g. [['ruff', 'check', '.']])"
+            )
+        for cmd in v:
+            if not cmd:
+                raise ValueError("checks.commands entries must be non-empty argv lists")
+        return v
 
 
 class PathsCfg(BaseModel):

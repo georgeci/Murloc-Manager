@@ -16,6 +16,8 @@ class CheckResult:
 
 def run_checks(commands: list[list[str]], cwd: Path) -> CheckResult:
     """Run check commands sequentially. Returns first failure, or last success."""
+    if not commands:
+        raise ValueError("run_checks requires at least one command")
     last: CheckResult | None = None
     for cmd in commands:
         proc = subprocess.run(
@@ -34,5 +36,5 @@ def run_checks(commands: list[list[str]], cwd: Path) -> CheckResult:
         )
         if not last.ok:
             return last
-    assert last is not None, "checks_runner called with empty commands"
+    assert last is not None  # commands non-empty checked above
     return last
